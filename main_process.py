@@ -25,6 +25,8 @@ MODEL_PATH = "edwards_insipiris_best_14jan.pt"
 
 RESIZE_CAM_WIDTH = 1920
 RESIZE_CAM_HEIGHT = 1080
+MAXIMIZED = False
+ENABLED_CAM = False
 
 CLASE_HILO = 6
 CLASE_TELA = 0
@@ -506,12 +508,16 @@ def on_key(window, key, scancode, action, mods):
     elif action == glfw.RELEASE:
         print(f"Tecla liberada: {key}")
 
+    if key == glfw.KEY_Q and action == glfw.PRESS:
+        ENABLED_CAM = not ENABLED_CAM
+
     if key == glfw.KEY_ESCAPE and action == glfw.PRESS:
         glfw.set_window_should_close(window, True)
         print("Escape pressed, closing window.")
         RUNNING_APP = False
 
-def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=False):
+def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
+    global MAXIMIZED
     print("=" * 60)
     print("Test: Renderizado de frames de diferentes tamaños")
     print("=" * 60)
@@ -536,7 +542,7 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=Fal
         WINDOW_WIDTH,
         "test_resize",
         position=(monitor_id*WINDOW_WIDTH, 100),
-        maximized=maximized,
+        maximized=MAXIMIZED,
         decorators=False,
     )
 
@@ -1250,8 +1256,8 @@ class SOP_Manager:
         return frame_render, map_2d, schema, self.detections 
         
 
-def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, has_rectangle=False):
-    global RUNNING_APP, GLOBAL_KEY_BOARD
+def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False):
+    global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED , ENABLED_CAM
     # ==================================================
     # Cargas
     # ==================================================
@@ -1274,7 +1280,7 @@ def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, h
 
     WINDOW_HEIGHT=720
     WINDOW_WIDTH=1280
-    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id, maximized=maximized)
+    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id)
     font = Font.get_font()
     summary_drawer = Drawer(font, WINDOW_HEIGHT, WINDOW_WIDTH)
         
@@ -1346,14 +1352,16 @@ def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, h
         # Composición final
         # ----------------------------------------------
         combined = np.hstack([frame_resized, right_stack])
-
-        cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
+        if not MAXIMIZED:
+            cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
 
         data = get_front_end_data(frame_idx,  frame, SOP)
 
         ###  Draw using lib
         summary_frame = np.zeros((RESIZE_CAM_HEIGHT, RESIZE_CAM_WIDTH, 3), dtype=np.uint8)
-      #  summary_frame = cv2.resize(original_frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
+
+        if ENABLED_CAM:
+            summary_frame = cv2.resize(original_frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
         for det in detections:
             if det.name == "cloth":
                 det.draw(summary_frame, (255, 255, 255),width = 1)
@@ -1483,8 +1491,10 @@ if __name__ == "__main__":
     args = parse_args()
     print(args)
 
+    MAXIMIZED = args.maximized
+
     if args.device != "":
-        main_loop(args.device, args.monitor_id, args.maximized, args.start_frame)
+        main_loop(args.device, args.monitor_id, args.start_frame)
     elif not os.path.exists(args.src):
         print("video file not found. exit")
     else:
@@ -1494,4 +1504,4 @@ if __name__ == "__main__":
             print("Failed to open file")
             exit()
 
-        main_loop(mp4File, args.monitor_id, args.maximized, args.start_frame)
+        main_loop(mp4File, args.monitor_id, args.start_frame)
