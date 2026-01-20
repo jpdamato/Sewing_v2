@@ -29,6 +29,7 @@ RESIZE_CAM_HEIGHT = 1080
 CLASE_HILO = 6
 CLASE_TELA = 0
 
+
 ################################################
 ### Render helpers
 def draw_SOP10_1(canvas_size=(400, 400), needle_theta=0.0, needle_visible=False):
@@ -495,6 +496,21 @@ def draw_segmentation(frame, result, model, alpha=0.4):
     # Mezcla alpha
     return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
+GLOBAL_KEY_BOARD =   0
+RUNNING_APP = True
+
+def on_key(window, key, scancode, action, mods):
+    global RUNNING_APP, GLOBAL_KEY_BOARD
+    if action == glfw.PRESS:
+        print(f"Tecla presionada: {key}")
+    elif action == glfw.RELEASE:
+        print(f"Tecla liberada: {key}")
+
+    if key == glfw.KEY_ESCAPE and action == glfw.PRESS:
+        glfw.set_window_should_close(window, True)
+        print("Escape pressed, closing window.")
+        RUNNING_APP = False
+
 def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=False):
     print("=" * 60)
     print("Test: Renderizado de frames de diferentes tamaños")
@@ -515,7 +531,7 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=Fal
         )
 
     print(f"\nCreando ventana de {WINDOW_WIDTH}x{WINDOW_HEIGHT}...")
-    wm.create_window(
+    window = wm.create_window(
         WINDOW_HEIGHT,
         WINDOW_WIDTH,
         "test_resize",
@@ -523,6 +539,9 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=Fal
         maximized=maximized,
         decorators=False,
     )
+
+    glfw.make_context_current(window.glfw_window)
+    glfw.set_key_callback( window.glfw_window , on_key)
 
     return wm
 
@@ -1232,6 +1251,7 @@ class SOP_Manager:
         
 
 def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, has_rectangle=False):
+    global RUNNING_APP, GLOBAL_KEY_BOARD
     # ==================================================
     # Cargas
     # ==================================================
@@ -1274,7 +1294,7 @@ def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, h
     paused = False
     last_frame = None
 
-    while cap.isOpened():
+    while cap.isOpened() and RUNNING_APP:
 
         if paused:
             frame = last_frame.copy()
@@ -1357,6 +1377,7 @@ def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, h
         # ----------------------------------------------
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
+            RUNNING_APP = False
             break
         elif key == ord('p'):  # +30 frames
             paused = not paused
@@ -1388,9 +1409,16 @@ def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, h
             current_action = action_mgr.set_action("sop10_1")
             yaw, tilt = current_action.yaw, current_action.tilt
             sop_Manager.renderer.last_img = None
+    
+    #################################
     cap.release()
     cv2.destroyAllWindows()
-
+    #####
+    try:
+        glfw.terminate()
+    except Exception as e:
+        print(f"Exception terminating GLFW: {e}")
+        pass 
 ###############################################################################
 def parse_args():
     # Create ArgumentParser object

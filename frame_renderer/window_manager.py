@@ -54,6 +54,8 @@ class WindowManager:
             return None
         self.windows[title] = window
 
+        return window   
+
     def render(self, window_title: str, frame: np.ndarray):
         window = self.windows.get(window_title)
         if window is None:
