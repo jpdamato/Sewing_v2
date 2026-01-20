@@ -495,7 +495,7 @@ def draw_segmentation(frame, result, model, alpha=0.4):
     # Mezcla alpha
     return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
-def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT):
+def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT,monitor_id = 0,maximized=False):
     print("=" * 60)
     print("Test: Renderizado de frames de diferentes tamaños")
     print("=" * 60)
@@ -519,8 +519,8 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT):
         WINDOW_HEIGHT,
         WINDOW_WIDTH,
         "test_resize",
-        position=(100, 100),
-        maximized=False,
+        position=(monitor_id*WINDOW_WIDTH, 100),
+        maximized=maximized,
         decorators=False,
     )
 
@@ -1231,7 +1231,7 @@ class SOP_Manager:
         return frame_render, map_2d, schema, self.detections 
         
 
-def main_loop(video_path,start_frame = 18000, has_rectangle=False):
+def main_loop(video_path,monitor_id = 0, maximized = False, start_frame=18000, has_rectangle=False):
     # ==================================================
     # Cargas
     # ==================================================
@@ -1254,7 +1254,7 @@ def main_loop(video_path,start_frame = 18000, has_rectangle=False):
 
     WINDOW_HEIGHT=720
     WINDOW_WIDTH=1280
-    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT)
+    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id, maximized=maximized)
     font = Font.get_font()
     summary_drawer = Drawer(font, WINDOW_HEIGHT, WINDOW_WIDTH)
         
@@ -1399,8 +1399,11 @@ def parse_args():
     parser.add_argument("--port", default="5102", help="Port for exposing")
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation_10A_cut.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
-    
+
+    parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--start_frame", default=100, help="Enable testing")
+    parser.add_argument("--maximized", default=False, help="Enable testing")
+   
     # Parse the arguments
     args = parser.parse_args()
 
@@ -1453,7 +1456,7 @@ if __name__ == "__main__":
     print(args)
 
     if args.device != "":
-        main_loop(args.device, args.start_frame)
+        main_loop(args.device, args.monitor_id, args.maximized, args.start_frame)
     elif not os.path.exists(args.src):
         print("video file not found. exit")
     else:
@@ -1463,4 +1466,4 @@ if __name__ == "__main__":
             print("Failed to open file")
             exit()
 
-        main_loop(mp4File, args.start_frame)
+        main_loop(mp4File, args.monitor_id, args.maximized, args.start_frame)
