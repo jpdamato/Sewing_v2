@@ -939,8 +939,7 @@ def compute_ribs(frame):
         if min_area < area < max_area:
             holes.append([centroids[i][0], centroids[i][1]])
 
-    print("Huecos detectados:", len(holes))
-
+    
     vis = frame.copy()
 
     for hole in holes:
@@ -1178,7 +1177,7 @@ class SOP_Manager:
         if ribs is not None:
             try:
                 px_to_cm, cm_to_px, dist_px_mean = estimate_pixel_to_cm(ribs, real_dist_mm=1.0, k=4)
-                print(f"Distancia media: {dist_px_mean:.2f} px")
+                #print(f"Distancia media: {dist_px_mean:.2f} px")
             except Exception as e:
                 print(f"Exception computing grid: {e}")
         map_2d =  self.action_mgr.texture
