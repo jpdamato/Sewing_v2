@@ -28,6 +28,9 @@ RESIZE_CAM_HEIGHT = 1080
 MAXIMIZED = False
 ENABLED_CAM = False
 
+GLOBAL_KEY_BOARD =   0
+RUNNING_APP = True
+
 CLASE_HILO = 6
 CLASE_TELA = 0
 
@@ -498,11 +501,8 @@ def draw_segmentation(frame, result, model, alpha=0.4):
     # Mezcla alpha
     return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
-GLOBAL_KEY_BOARD =   0
-RUNNING_APP = True
-
 def on_key(window, key, scancode, action, mods):
-    global RUNNING_APP, GLOBAL_KEY_BOARD
+    global RUNNING_APP, GLOBAL_KEY_BOARD, ENABLED_CAM
     if action == glfw.PRESS:
         print(f"Tecla presionada: {key}")
     elif action == glfw.RELEASE:
@@ -729,6 +729,7 @@ def process_needle(needle_s, img):
 
 #############################################################
 def show_oriented_cloth(mask, img):
+    global MAXIMIZED
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if (len(cnts) == 0):
         return
@@ -762,8 +763,8 @@ def show_oriented_cloth(mask, img):
         0.8,
         (0,255,0),
         2)
-        
-    cv2.imshow("Oriented Cloth", vis)
+    if not MAXIMIZED:
+        cv2.imshow("Oriented Cloth", vis)
 
 def filtrar_hilos_validos(hilos_contours,
                           contorno_tela,
