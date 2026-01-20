@@ -286,7 +286,7 @@ class TrackerManager:
         self.min_samples = min_samples
         self.history = {}
 
-    def update(self,frame_id, boxes, ids, classes, tela_bbox=None):
+    def update(self,frame_id, boxes,contours, ids, classes, tela_bbox=None):
 
         for box, tid, cls in zip(boxes, ids, classes):
 
@@ -926,7 +926,7 @@ def compute_ribs(frame):
     gray, 0, 255,
     cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    cv2.imshow("Binarized", bw)
+    #cv2.imshow("Binarized", bw)
 
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(bw, connectivity=8)
 
@@ -947,7 +947,7 @@ def compute_ribs(frame):
         cx, cy = hole
         cv2.circle(vis, (int(cx), int(cy)), 2, (0,0,255), -1)
 
-    cv2.imshow("Huecos en tela segmentada", vis)
+   # cv2.imshow("Huecos en tela segmentada", vis)
     return vis , holes
 
 
@@ -1091,17 +1091,8 @@ class SOP_Manager:
                       # bbox de la tela
            
             annotated = results.plot()
-            cv2.imshow("tracking", annotated)
+            #cv2.imshow("tracking", annotated)
           
-            boxes = results.boxes.xyxy.cpu().numpy()
-            if results.boxes.id is not None:
-                ids = results.boxes.id.cpu().numpy().astype(int)
-                classes = results.boxes.cls.cpu().numpy().astype(int)
-
-                tela_boxes = boxes[classes == 0]
-                tela_bbox = tela_boxes[0] if len(tela_boxes) > 0 else None
-
-                self.valid_tracks = tracker_mgr.update(frame_number, boxes, ids, classes, tela_bbox            )
         else:
             results = self.model.predict(frame, conf=0.3, verbose=False)[0]
             self.valid_tracks = []
@@ -1116,7 +1107,7 @@ class SOP_Manager:
 
         self.detections = []
         
-
+        #### compute all contours
         for i, cls_id in enumerate(results.boxes.cls):
             cls_name = self.model.names[int(cls_id)]
             mask_np = None
@@ -1157,6 +1148,20 @@ class SOP_Manager:
                     needle_masks.append(s)
  
                 self.detections.append(s)  
+        
+        ### calculate tracking
+        if results.boxes.id is not None:
+            boxes = results.boxes.xyxy.cpu().numpy()
+        
+            ids = results.boxes.id.cpu().numpy().astype(int)
+            classes = results.boxes.cls.cpu().numpy().astype(int)
+            contours = results.masks.data.cpu().numpy() if results.masks is not None else None
+
+            tela_boxes = boxes[classes == 0]
+            tela_bbox = tela_boxes[0] if len(tela_boxes) > 0 else None
+
+            self.valid_tracks = tracker_mgr.update(frame_number, boxes,contours, ids, classes, tela_bbox)
+        
         frame_render = frame.copy() ##results.plot()
        
         ribs = None
@@ -1266,13 +1271,21 @@ def main_loop(video_path,start_frame = 18000, has_rectangle=False):
     step_frame = 2
     
     review_mode = True
-    
+
+    paused = False
+    last_frame = None
+
     while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
+
+        if paused:
+            frame = last_frame.copy()
+        else:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
         original_frame = frame.copy()
+        last_frame = frame.copy()
 
         frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
@@ -1346,6 +1359,8 @@ def main_loop(video_path,start_frame = 18000, has_rectangle=False):
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
             break
+        elif key == ord('p'):  # +30 frames
+            paused = not paused
         elif key == ord('f'):  # +30 frames
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx + 30)
         elif key == ord('a'):
@@ -1384,6 +1399,8 @@ def parse_args():
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="5102", help="Port for exposing")
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation_10A_cut.mp4", help="Video source")
+    parser.add_argument("--device", default="", help="Video source")
+    
     parser.add_argument("--start_frame", default=100, help="Enable testing")
     # Parse the arguments
     args = parser.parse_args()
@@ -1436,8 +1453,9 @@ if __name__ == "__main__":
     args = parse_args()
     print(args)
 
-    
-    if not os.path.exists(args.src):
+    if args.device != "":
+        main_loop(args.device, args.start_frame)
+    elif not os.path.exists(args.src):
         print("video file not found. exit")
     else:
         mp4File = get_mp4_from_path(args.src)
@@ -1446,4 +1464,4 @@ if __name__ == "__main__":
             print("Failed to open file")
             exit()
 
-    main_loop(mp4File, args.start_frame)
+        main_loop(mp4File, args.start_frame)
