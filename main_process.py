@@ -953,7 +953,7 @@ class SOP_Manager:
         return frame_render, map_2d, schema, self.detections 
         
 
-def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
+def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED , ENABLED_CAM
     # ==================================================
     # Cargas
@@ -965,8 +965,12 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False,
     cap = cv2.VideoCapture(video_path)
    
     ## sop30 = first frame = 10000
-    cap.set(cv2.CAP_PROP_POS_FRAMES,start_frame )
-
+    if (video_path == "/dev/video0"):
+        print("using real time camera")
+        step_frame = 1
+    else:   
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        step_frame = 2
     # ==================================================
     # Loop principal
     # ==================================================
@@ -988,9 +992,7 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False,
     framework_yaw = 0.0
     #########################
     SOP = {"name": 0, "index":0, "step_order":0}
-
-    step_frame = 2
-    
+ 
     review_mode = True
 
     paused = False
