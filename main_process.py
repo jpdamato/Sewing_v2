@@ -3,7 +3,7 @@ import numpy as np
 from ultralytics import YOLO
 from types import SimpleNamespace
 from ultralytics.trackers.byte_tracker import BYTETracker
-
+import json
 from dataclasses import dataclass
 import argparse
 import json
@@ -16,6 +16,8 @@ import os
 from frame_renderer.window_manager import WindowManager
 from frame_renderer.drawer import Drawer
 from frame_renderer.fonts import Font
+import tools as tools
+import helpers as helpers
 # ==================================================
 # Configuración
 # ==================================================
@@ -23,8 +25,8 @@ from frame_renderer.fonts import Font
 IMAGE_2D_PATH = "SOP30-Lateral_B.png"
 MODEL_PATH = "edwards_insipiris_best_14jan.pt"
 
-RESIZE_CAM_WIDTH = 1920
-RESIZE_CAM_HEIGHT = 1080
+RESIZE_CAM_WIDTH = 1280
+RESIZE_CAM_HEIGHT = 720
 MAXIMIZED = False
 ENABLED_CAM = False
 
@@ -33,107 +35,6 @@ RUNNING_APP = True
 
 CLASE_HILO = 6
 CLASE_TELA = 0
-
-
-################################################
-### Render helpers
-def draw_SOP10_1(canvas_size=(400, 400), needle_theta=0.0, needle_visible=False):
-    img = np.ones((*canvas_size, 3), dtype=np.uint8) * 255
-
-    cv2.putText(img, "SOP 10_1 ",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, (0, 0, 0), 2)
-
-    return img
-
-def draw_SOP30_1(canvas_size=(400, 400), needle_theta=0.0, needle_visible=False):
-    img = np.ones((*canvas_size, 3), dtype=np.uint8) * 255
-
-    h, w = canvas_size
-    cx, cy = w // 2, h // 2
-    R = int(min(w, h) * 0.35)
-
-    # --- Círculo principal
-    cv2.circle(img, (cx, cy), R, (0, 0, 0), 2)
-
-    # --- Rectángulos (3 zonas)
-    rect_w, rect_h = 40, 20
-    angles = [0, 2*np.pi/3, 4*np.pi/3]
-
-    for i, a in enumerate(angles):
-        rx = int(cx + (R + 25) * np.cos(a) - rect_w / 2)
-        ry = int(cy + (R + 25) * np.sin(a) - rect_h / 2)
-        if i == 0:
-            color = (0, 0, 255)  # rojo para la zona central
-        else:
-            color = (0, 0, 0)
-
-        cv2.rectangle(img,
-                      (rx, ry),
-                      (rx + rect_w, ry + rect_h),
-                      color, 2)
-
-    # --- Aguja (línea)
-    x_end = int(cx + R * np.cos(needle_theta))
-    y_end = int(cy + R * np.sin(needle_theta))
-
-    if needle_visible:
-        cv2.line(img, (cx, cy), (x_end, y_end), (0, 0, 255), 3)
-
-    cv2.putText(img, "TopCutting:SOP 30_1 - Frontal view",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, (0, 0, 0), 2)
-
-    return img
-
-def draw_SOP30_2(canvas_size=(400, 400),needle_visible=False, needle_x_norm=0.5):
-    img = np.ones((*canvas_size, 3), dtype=np.uint8) * 255
-
-    h, w = canvas_size
-
-    # --- Cilindro (vista lateral)
-    margin = 50
-    cyl_rect = (margin, h//3, w - 2*margin, h//3)
-
-    cv2.rectangle(img,
-                  (cyl_rect[0], cyl_rect[1]),
-                  (cyl_rect[0] + cyl_rect[2], cyl_rect[1] + cyl_rect[3]),
-                  (0, 0, 0), 2)
-
-    # --- Rectángulos internos (3 zonas)
-    zone_w = cyl_rect[2] // 5
-    zone_h = cyl_rect[3] // 2
-    offsets = [0.2, 0.5, 0.8]
-
-    for idx,o in enumerate(offsets):
-        zx = int(cyl_rect[0] + o * cyl_rect[2] - zone_w / 2)
-        zy = int(cyl_rect[1] + cyl_rect[3] / 2 - zone_h / 2)
-        if idx == 0:
-            color = (0, 0, 255)  # rojo para la zona central
-        else:
-            color = (0, 0, 0)
-            
-        cv2.rectangle(img,
-                      (zx, zy),
-                      (zx + zone_w, zy + zone_h),
-                      color, 2)
-
-    # --- Aguja (línea)
-    nx = int(cyl_rect[0] + needle_x_norm * cyl_rect[2])
-    if needle_visible:
-        cv2.line(img,
-                (nx, cyl_rect[1] - 30),
-                (nx, cyl_rect[1] + cyl_rect[3] + 30),
-                (0, 0, 255), 3)
-
-    cv2.putText(img, "TopCutting:SOP 30_2 - Lateral view",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, (0, 0, 0), 2)
-
-    return img
 
 
 def draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=10, gap=6):
@@ -214,7 +115,53 @@ def draw_center_line(img,  center, direction, length, color = (0,0,255) ):
 
     return img
 
+#######################################################
+def intersect_line_segment(p, d, a, b, eps=1e-6):
+    """
+    Intersección entre recta infinita P + t*d y segmento AB
+    Retorna punto o None
+    """
+    p = np.array(p, dtype=np.float32)
+    d = np.array(d, dtype=np.float32)
+    a = np.array(a, dtype=np.float32)
+    b = np.array(b, dtype=np.float32)
 
+    r = d
+    s = b - a
+
+    rxs = np.cross(r, s)
+    q_p = a - p
+
+    if abs(rxs) < eps:
+        return None  # paralelos
+
+    t = np.cross(q_p, s) / rxs
+    u = np.cross(q_p, r) / rxs
+
+    if 0.0 <= u <= 1.0:
+        return p + t * r
+
+    return None
+
+def intersect_line_contour(center, direction, contour):
+    """
+    Retorna lista de puntos donde la recta intersecta el contorno
+    """
+    intersections = []
+
+    p = np.array(center, dtype=np.float32)
+    d = np.array(direction, dtype=np.float32)
+
+    n = len(contour)
+    for i in range(n):
+        a = contour[i]
+        b = contour[(i + 1) % n]
+
+        pt = intersect_line_segment(p, d, a, b)
+        if pt is not None:
+            intersections.append(pt)
+
+    return intersections
 ################################################
 ### Classes
 def estimate_pixel_to_cm(points,
@@ -402,6 +349,9 @@ class SegmentedObject:
         self.name = name
         self.color = color
         self.rect = None
+        self.intersections = []
+        self.valid = True
+        self.track_id = -1
 
         all_points = np.vstack([contour])
         if len(contour) > 0:
@@ -427,15 +377,39 @@ class SegmentedObject:
            # higher → fewer points
         self.contour = cv2.approxPolyDP(self.contour, epsilon, True)
 
+    def compute_intersection_contour(self, contour):
+        if contour is None:
+            self.intersections = []
+        else:
+            vx, vy = self.direction
+            perp_dir = (-vy, vx)
+
+            self.intersections = intersect_line_contour(self.center, perp_dir, contour)
+        return self.intersections
+
     def angle(self):
         dx, dy = self.direction
         angle = math.degrees(math.atan2(dy, dx))
 
         return angle
 
-    def draw(self, frame, color = (0,0,255), width = 2):
-         # Draw rectangle on original image
+    
+    def draw_contours(self, frame, color=(0, 255, 0), width=2):
         cv2.drawContours(frame, [self.contour], 0, color, width)
+
+    def compute_features(self):
+        pass
+
+    def draw(self, frame, color=(0, 0, 255), width=2):
+        self.get_center_line(frame)
+
+        draw_center_line(frame, self.center, self.direction, max(self.rect[1]), color)
+
+        for pt in self.intersections:
+            cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
+    
+         # Draw rectangle on original image
+        #cv2.drawContours(frame, [self.contour], 0, color, width)
 
      
 ###########################################
@@ -464,8 +438,9 @@ class Stitch(SegmentedObject):
 
         return angle
     
-###########################################
-
+    def compute_features(self):
+        pass
+#
 def draw_segmentation(frame, result, model, alpha=0.4):
     overlay = frame.copy()
 
@@ -538,8 +513,8 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 
     print(f"\nCreando ventana de {WINDOW_WIDTH}x{WINDOW_HEIGHT}...")
     window = wm.create_window(
-        WINDOW_HEIGHT,
-        WINDOW_WIDTH,
+        RESIZE_CAM_HEIGHT,
+        RESIZE_CAM_WIDTH,
         "test_resize",
         position=(monitor_id*WINDOW_WIDTH, 100),
         maximized=MAXIMIZED,
@@ -552,26 +527,24 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
     return wm
 
 ### current data is hardcoded for testing purposes
-def get_data_for_unity_sop1(frame):
-    # Placeholder function to simulate data extraction for Unity
-    # In a real scenario, this would involve image processing to find points of interest
-    height, width = frame.shape[:2]
-    points = [
-        [width // 4, height // 4],
-        [width // 2, height // 2],
-        [3 * width // 4, 3 * height // 4]
-    ]
-    point_ids = [1, 2, 3]
-
+def get_data_for_unity_sop10(sop_Manager,frame):
+    
     data = {}
-    threads = [{ "id": 4,
+    dthreas = []
+    point_ids = []
+    idx = 0
+    for thread in sop_Manager.selected_stitches.values():
+        dthreas.append({"id": idx,
+                    "center": [float(thread.center[0]), float(thread.center[1])],
+                    "length": float(max(thread.rect[1])),
+                    "has_devitation" : False,
                     "deviationDistance": 0.0122350436,
                     "deviationLength": 0.149589762,
-                    "deviationAngle": 2.6627202,
-                    "deviations": [] }    ]
+                    "deviationAngle": 2.6627202 }   )
+        point_ids.append(idx)
+        idx += 1
 
-
-    data["threads"] = threads
+    data["threads"] = dthreas
     
     return data, point_ids
  
@@ -601,232 +574,6 @@ def get_data_for_unity_sop2(frame):
 
 def get_data_for_unity_sop3(frame):
     return {}, []
-
-def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
-    h, w = image.shape[:2]
-    center = (w / 2, h / 2)
-
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    cos = abs(M[0,0])
-    sin = abs(M[0,1])
-
-    new_w = int(h*sin + w*cos)
-    new_h = int(h*cos + w*sin)
-
-    M[0,2] += (new_w / 2) - center[0]
-    M[1,2] += (new_h / 2) - center[1]
-
-    return cv2.warpAffine(
-        image, M, (new_w, new_h),
-        flags=interp,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=border)
-        
-#################################################################
-def segment_from_mask(mask, shape):
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if (len(cnts) == 0):
-        return {      "contour" : [] }
-    h_orig, w_orig = shape[:2]
-    sx = w_orig / mask.shape[1]
-    sy = h_orig / mask.shape[0]
-    contours_scaled = []
-    for cnt in cnts:
-        cnt = cnt.astype(np.float32)
-        cnt[:, 0, 0] *= sx   # x
-        cnt[:, 0, 1] *= sy   # y
-        contours_scaled.append(cnt.astype(np.int32))
-    mx_cnt = max(contours_scaled, key=cv2.contourArea)
-
-    rect = cv2.minAreaRect(cnt)
-    (cx, cy), (w, h), angle = rect
-
-    if w < h:
-        angle += 90
-
-    return {
-        "contour" : mx_cnt,
-        "center": np.array([cx, cy]),
-        "angle": angle,
-        "length": max(w, h),
-        "rect": rect
-    }
-
-def are_colinear(seg1, seg2, angle_tol=5, dist_tol=15):
-    # 1. Orientación similar
-    if seg1 is None or seg2 is None:
-        return False
-
-    if abs(seg1["angle"] - seg2["angle"]) > angle_tol:
-        return False
-
-    # 2. Distancia del centro de seg2 a la recta de seg1
-    theta = np.deg2rad(seg1["angle"])
-    direction = np.array([np.cos(theta), np.sin(theta)])
-    normal = np.array([-direction[1], direction[0]])
-
-    dist = abs(np.dot(seg2["center"] - seg1["center"], normal))
-    return dist < dist_tol
-
-def merge_segments(segments):
-    pts = []
-
-    for seg in segments:
-        rect = seg["rect"]
-        box = cv2.boxPoints(rect)
-        pts.extend(box)
-
-    pts = np.array(pts)
-
-    # Ajuste de línea (mínimos cuadrados)
-    vx, vy, x0, y0 = cv2.fitLine(
-        pts, cv2.DIST_L2, 0, 0.01, 0.01
-    )
-
-    # Proyección para extremos
-    projections = []
-    for p in pts:
-        t = (p[0] - x0) * vx + (p[1] - y0) * vy
-        projections.append(t)
-
-    t_min, t_max = min(projections), max(projections)
-
-    p1 = (int(x0 + vx * t_min), int(y0 + vy * t_min))
-    p2 = (int(x0 + vx * t_max), int(y0 + vy * t_max))
-
-    return p1, p2
-
-def process_needle(needle_s, img):
-    needle_segments = []
-
-    for needle in needle_s:
-        needle_segments.append(needle.contour)
-
-    groups = []
-    used = set()
-
-    for i, s1 in enumerate(needle_segments):
-        if i in used:
-            continue
-
-        group = [s1]
-        used.add(i)
-
-        for j, s2 in enumerate(needle_segments):
-            if j in used:
-                continue
-            if are_colinear(s1, s2):
-                group.append(s2)
-                used.add(j)
-
-        groups.append(group)
-
-    for group in groups:
-        if len(group) >= 2:
-            p1, p2 = merge_segments(group)
-            cv2.line(img, p1, p2, (0,255,0), 3)
-
-
-#############################################################
-def show_oriented_cloth(mask, img):
-    global MAXIMIZED
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if (len(cnts) == 0):
-        return
-
-    cnt = max(cnts, key=cv2.contourArea)
-    rect = cv2.minAreaRect(cnt)
-    (cx, cy), (w, h), angle = rect
-
-    # Corrección estándar OpenCV
-    if h < w:
-        angle += 90
-
-    (h_img, w_img) = img.shape[:2]
-    center = (int(cx), int(cy))
-
-    rot_img = rotate_full(img, angle - 180, border=(0, 0, 0), interp=cv2.INTER_CUBIC)
-    rot_mask = rotate_full(mask, angle - 180, border=(0, 0, 0), interp=cv2.INTER_NEAREST)
-
-    vis = rot_img.copy()
-
-    cnts_rot, _ = cv2.findContours(rot_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnt_rot = max(cnts_rot, key=cv2.contourArea)
-
-    cv2.drawContours(vis, [cnt_rot], -1, (0,255,0), 2)
-
-    cv2.putText(
-        vis,
-        f"Aligned angle: {angle:.1f} deg",
-        (20, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0,255,0),
-        2)
-    if not MAXIMIZED:
-        cv2.imshow("Oriented Cloth", vis)
-
-def filtrar_hilos_validos(hilos_contours,
-                          contorno_tela,
-                          inside_ratio_min=0.8,
-                          length_factor=2.0,
-                          n_samples=20):
-    """
-    Descarta hilos muy largos o que salen de la tela.
-
-    Retorna:
-    - hilos_filtrados
-    """
-
-    if len(hilos_contours) == 0:
-        return []
-
-    # --------------------------------------------------
-    # 1) Longitudes
-    lengths = np.array([
-        cv2.arcLength(cnt, False)
-        for cnt in hilos_contours
-    ])
-
-    median = np.median(lengths)
-    mad = np.median(np.abs(lengths - median)) + 1e-6
-
-    max_length = median + length_factor * mad
-
-    hilos_validos = []
-
-    # --------------------------------------------------
-    # 2) Filtrado
-    for cnt, L in zip(hilos_contours, lengths):
-
-        # ---- (a) largo razonable
-        if L > max_length:
-            continue
-
-        # ---- (b) porcentaje dentro de la tela
-        pts = cnt.reshape(-1, 2)
-
-        if len(pts) < 2:
-            continue
-
-        # sampleo uniforme
-        idx = np.linspace(0, len(pts) - 1, n_samples).astype(int)
-
-        inside = 0
-        for i in idx:
-            p = tuple(pts[i])
-            if cv2.pointPolygonTest(contorno_tela, (int(pts[i][0]), int(pts[i][1])), False) >= 0:
-                inside += 1
-
-        inside_ratio = inside / len(idx)
-
-        if inside_ratio < inside_ratio_min:
-            continue
-
-        hilos_validos.append(cnt)
-
-    return hilos_validos
-
 def render_guideline(frame, hilos_contours, contorno_tela,
                      color=(0, 255, 0), thickness=3,
                             smooth=1.0,
@@ -939,41 +686,6 @@ def render_guideline(frame, hilos_contours, contorno_tela,
     )
 
     return frame
-#################################################
-###  Compute ribs
-def compute_ribs(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Mejorar contraste local
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    gray = clahe.apply(gray)
-
-    _, bw = cv2.threshold(
-    gray, 0, 255,
-    cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    #cv2.imshow("Binarized", bw)
-
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(bw, connectivity=8)
-
-    holes = []
-    min_area = 20
-    max_area = 300
-
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if min_area < area < max_area:
-            holes.append([centroids[i][0], centroids[i][1]])
-
-    
-    vis = frame.copy()
-
-    for hole in holes:
-        cx, cy = hole
-        cv2.circle(vis, (int(cx), int(cy)), 2, (0,0,255), -1)
-
-   # cv2.imshow("Huecos en tela segmentada", vis)
-    return vis , holes
 
 
 def serializeFrame(self, frame, resizeFactor = 1):
@@ -1010,57 +722,6 @@ def get_front_end_data(nFrame,  frame, SOP):
     except Exception as e:
         print (f"Exception at exporting : {e}")
 
-def flujo_denso(frame_prev, frame_curr,
-                pyr_scale=0.5, levels=3, winsize=15,
-                iterations=3, poly_n=5, poly_sigma=1.2,
-                draw=True):
-    """
-    Flujo óptico denso entre dos frames consecutivos
-
-    Parámetros:
-    - frame_prev, frame_curr: imágenes BGR consecutivas
-    - draw: visualiza el flujo sobre frame_curr
-
-    Retorna:
-    - frame_vis
-    - flow (H x W x 2)
-    - mag, ang
-    """
-    prev_gray = cv2.cvtColor(frame_prev, cv2.COLOR_BGR2GRAY)
-    curr_gray = cv2.cvtColor(frame_curr, cv2.COLOR_BGR2GRAY)
-
-    flow = cv2.calcOpticalFlowFarneback(
-        prev_gray, curr_gray, None,
-        pyr_scale, levels, winsize,
-        iterations, poly_n, poly_sigma, 0
-    )
-
-    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-    frame_vis = frame_curr.copy()
-
-    if draw:
-        # muestreo para no saturar la imagen
-        step = 16
-        h, w = prev_gray.shape
-
-        for y in range(0, h, step):
-            for x in range(0, w, step):
-                dx, dy = flow[y, x]
-                if mag[y, x] < 0.2:
-                    continue
-
-                cv2.arrowedLine(
-                    frame_vis,
-                    (x, y),
-                    (int(x + dx), int(y + dy)),
-                    (0, 255, 0),
-                    1,
-                    tipLength=0.3
-                )
-
-    return frame_vis, flow, mag, ang
-
 class SOP_Manager:
     def __init__(self):
         self.current_sop = None
@@ -1069,22 +730,25 @@ class SOP_Manager:
         self.tilt = 0.20
         self.sop_index = 10
         self.prev_cloth_frame = None
+        self.detections = []
 
         self.renderer = CylinderRenderer(eps=1e-3)
         self.action_mgr=ActionManager(ACTIONS)
-        self.tracking = 100
+        self.tracking=100
+        
+        self.selected_stitches = {}
     
    
     def estimate_SOP(self, frame, frame_number, detections):
         best_conf = 0
         self.sop_index = 10
 
-        results = self.model.predict(frame, conf=0.3, verbose=False)[0]
+        results = self.detections
 
         self.tracking -= 1
-        for i, cls_id in enumerate(results.boxes.cls):
-            cls_name = self.model.names[int(cls_id)]
-            if cls_name == "needle" or cls_name == "scissors":
+        ##use previous detections
+        for det in self.detections:
+            if det.name == "needle" or det.name == "scissors":
                 self.tracking += 1
                 break
 
@@ -1104,8 +768,9 @@ class SOP_Manager:
         # ----------------------------------------------
         # ----------------------------------------------
         needle_visible = False
-
         mask_cloth = None
+        annotated = None
+
       #  
         if self.tracking <=0 :
             results = self.model.track(    frame,    persist=True,
@@ -1125,14 +790,22 @@ class SOP_Manager:
         x1, y1, x2, y2 = 0, 0, 0, 0
         
         needle_masks = []
-
         needle_contours = []
-
         cloth_contour = None
-
         self.detections = []
         
-        #### compute all contours
+        #### compute cloth 
+        mask_cloth = tools.merge_cloth_masks(results, cloth_class_id=0, frame_shape=frame.shape)
+        cloth_contour, cloth_box = tools.extract_cloth_contour_and_bbox(mask_cloth)
+
+        if cloth_contour is not None:
+            cloth = SegmentedObject(  box=cloth_box,  contour=cloth_contour,name="cloth",  color=(0, 255, 0)   )
+            cloth.mask = mask_cloth
+            cloth.smooth(epsilon=5.0)
+            self.detections.append(cloth)
+        else:
+            cloth = None
+        #### compute other contours        
         for i, cls_id in enumerate(results.boxes.cls):
             cls_name = self.model.names[int(cls_id)]
             mask_np = None
@@ -1142,7 +815,7 @@ class SOP_Manager:
                 x1, y1, x2, y2 = map(int, box)
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
-            if cls_name == "metal_framework":
+            if cls_name == "metal_framewpork":
                 box = results.boxes.xyxy[i].cpu().numpy()
                 x1, y1, x2, y2 = map(int, box)
                 mask = results.masks.data[i]
@@ -1154,7 +827,7 @@ class SOP_Manager:
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
-            if cls_name == "cloth":
+            if cls_name == "clothX":
                 mask = results.masks.data[i]
                 box = results.boxes.xyxy[i].cpu().numpy()
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
@@ -1162,16 +835,23 @@ class SOP_Manager:
                 
                 #frame = draw_segmentation(frame, results, model)
             if mask_np is not None:
-                cnt = segment_from_mask(mask_np, frame.shape)["contour"]
+                cnt = tools.segment_from_mask(mask_np, frame.shape)["contour"]
                 if len(cnt) == 0:
                     continue
                 s = SegmentedObject(  box=box,  contour=cnt,name=cls_name,  color=(0, 255, 0)   )
                 s.mask = mask_np
+                s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
                 s.smooth(epsilon=5.0)
 
                 if cls_name == "needle":
                     needle_masks.append(s)
- 
+                ### check if thread is valid
+                if cls_name == "thread":
+                    valids = tools.filtrar_hilos_validos([cnt], cloth_contour)
+                    if len(valids) > 0:
+                        s.valid = True
+                    else:
+                        s.valid = False
                 self.detections.append(s)  
         
         ### calculate tracking
@@ -1185,17 +865,30 @@ class SOP_Manager:
             tela_boxes = boxes[classes == 0]
             tela_bbox = tela_boxes[0] if len(tela_boxes) > 0 else None
 
-            self.valid_tracks = tracker_mgr.update(frame_number, boxes,contours, ids, classes, tela_bbox)
-        
+            self.valid_tracks = tracker_mgr.update(frame_number, boxes, contours, ids, classes, tela_bbox)
+            
+            for v in self.valid_tracks:
+                tid = v["track_id"]
+
+                if tid in self.selected_stitches:
+                    continue
+                selected = [n for n in self.detections if n.track_id == tid]
+                if len(selected) == 0:
+                    continue
+                self.selected_stitches[tid] = selected[0]
+                self.selected_stitches[tid].track_id = tid
+                self.selected_stitches[tid].compute_features()
+
+
         frame_render = frame.copy() ##results.plot()
        
         ribs = None
         ########## compute ribs
         if mask_cloth is not None:
             frame_cloth = cv2.bitwise_and(frame, frame, mask=mask_cloth)
-            frame_cloth, ribs = compute_ribs(frame_cloth)
+            frame_cloth, ribs = tools.compute_ribs(frame_cloth)
             #### extract cloth
-            show_oriented_cloth(mask_cloth, frame_cloth)
+            helpers.show_oriented_cloth(mask_cloth, frame_cloth, is_maximized =MAXIMIZED)
             
             #if  self.prev_cloth_frame is not None:
             #    frame_render, _, _, _, = flujo_denso(  self.prev_cloth_frame,   frame_cloth,   draw=True     )
@@ -1212,52 +905,55 @@ class SOP_Manager:
         tilt = self.action_mgr.current.tilt
         
         if not review_mode:
-            process_needle(needle_masks, frame_render)
+            tools.process_needle(needle_masks, frame_render)
 
         thread_contours = [n.contour for n in self.detections if n.name == "thread"]
-        self.cloth_contours = [n.contour for n in self.detections if n.name == "cloth" ]
+        self.cloth_contours = cloth_contour
         
         #################################################################3
-        if len(thread_contours) >= 3 and len(self.cloth_contours) > 0:
-            
-            self.hilos_ok = filtrar_hilos_validos(
-                 thread_contours, self.cloth_contours[0],
+        if len(thread_contours) >= 3 and cloth_contour is not None:            
+            self.hilos_ok = tools.filtrar_hilos_validos(
+                 thread_contours, cloth_contour,
                   inside_ratio_min=0.85, length_factor=2.5)
         else:
             self.hilos_ok = []
 
-            
+           
         # ----------------------------------------------
         # Render cilindro
         # ----------------------------------------------
         # Render cilindro usando la acción actual
         if self.action_mgr.current.name == "sop10_1":
-            schema = draw_SOP10_1(needle_theta=yaw, needle_visible=needle_visible)
+            schema = helpers.draw_SOP10_1(needle_theta=yaw, needle_visible=needle_visible)
         elif self.action_mgr.current.name == "sop30_1":
-            schema = draw_SOP30_1(needle_theta=yaw, needle_visible=needle_visible)
+            schema = helpers.draw_SOP30_1(needle_theta=yaw, needle_visible=needle_visible)
 
         elif self.action_mgr.current.name == "sop30_2":
-            schema = draw_SOP30_2(needle_x_norm=(yaw % (2*np.pi)) / (2*np.pi), needle_visible=needle_visible)
+            schema = helpers.draw_SOP30_2(needle_x_norm=(yaw % (2*np.pi)) / (2*np.pi), needle_visible=needle_visible)
+
+        if annotated is not None:
+            cv2.imshow("tracking", annotated)
 
         ###
         for det in self.detections :
             if det.name == "thread":
+                det.compute_intersection_contour(self.cloth_contours)
                 det.draw(frame_render)
-
-      
-         #### compute proposed guide line 
+            else:
+                det.draw_contours(frame_render)
+       #### compute proposed guide line 
         if x1 > 0:
             line_x = x2 + 10  # 10 pixels below detected framework
             y_start = y1 - 50
             y_end = y2 + 50
-            draw_dashed_line(frame_render, (line_x, y_start), (line_x, y_end), (0, 255, 0), thickness=2, dash_len=15, gap=10)
+      #      draw_dashed_line(frame_render, (line_x, y_start), (line_x, y_end), (0, 255, 0), thickness=2, dash_len=15, gap=10)
 
         self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
 
         return frame_render, map_2d, schema, self.detections 
         
 
-def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False):
+def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED , ENABLED_CAM
     # ==================================================
     # Cargas
@@ -1270,7 +966,6 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
    
     ## sop30 = first frame = 10000
     cap.set(cv2.CAP_PROP_POS_FRAMES,start_frame )
-
 
     # ==================================================
     # Loop principal
@@ -1300,6 +995,10 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
 
     paused = False
     last_frame = None
+
+    all_data = []
+
+    os.makedirs(working_path, exist_ok=True)
 
     while cap.isOpened() and RUNNING_APP:
 
@@ -1356,7 +1055,7 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
         if not MAXIMIZED:
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
 
-        data = get_front_end_data(frame_idx,  frame, SOP)
+       
 
         ###  Draw using lib
         summary_frame = np.zeros((RESIZE_CAM_HEIGHT, RESIZE_CAM_WIDTH, 3), dtype=np.uint8)
@@ -1365,21 +1064,22 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
             summary_frame = cv2.resize(original_frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
         for det in detections:
             if det.name == "cloth":
-                det.draw(summary_frame, (255, 255, 255),width = 1)
+                det.draw_contours(summary_frame, (255, 255, 255),width = 2)
             elif det.name == "thread":
                 det.draw(summary_frame, (220, 55, 55),width = 2)
         summary_frame = cv2.flip(summary_frame, 0)
         summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
+        ####################################################################################
         if sop_Manager.hilos_ok is not None and len(sop_Manager.hilos_ok) > 0 and len(sop_Manager.cloth_contours) > 0:
-            try:
-                render_guideline(summary_frame, sop_Manager.hilos_ok, sop_Manager.cloth_contours[0])
-            except Exception as e:
-                print(f"Exception rendering guideline: {e}")
+              
+              #  render_guideline(summary_frame, sop_Manager.hilos_ok, sop_Manager.cloth_contours[0])
+            pass
         if sop_Manager.tracking <= 0:
             summary_drawer.draw_text(summary_frame, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
         else:
             summary_drawer.draw_text(summary_frame, "WORKING", 50, 50, (0, 255, 0), scale=3)
 
+        summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.selected_stitches)}", 50, 80, (0, 255, 0), scale=2)
         wm.render("test_resize", summary_frame)
         # ----------------------------------------------
         # Controles
@@ -1401,7 +1101,7 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
         elif key == ord('s'):
             tilt -= 0.05
         elif key == ord('v'):
-            for tv in sop_manager.valid_tracks:
+            for tv in sop_Manager.valid_tracks:
                 print(tv)
 
         if key == ord('1'):
@@ -1418,7 +1118,38 @@ def main_loop(video_path,monitor_id = 0, start_frame=18000, has_rectangle=False)
             current_action = action_mgr.set_action("sop10_1")
             yaw, tilt = current_action.yaw, current_action.tilt
             sop_Manager.renderer.last_img = None
-    
+
+        Data = {}
+
+        try:
+            
+            #### 
+            Data["id"] = frame_idx                    
+            sFrame = serializeFrame(None, frame, resizeFactor=0.1)                      
+            Data["frame"] = sFrame
+            Data["sop"] = SOP["name"]
+            Data["step_number"] = SOP["index"]
+            Data["step_order"] = SOP["step_order"]
+
+            unity_points , unity_points_ids = get_data_for_unity_sop10(sop_Manager, frame)
+            ## bug still hardcoded points
+            Data["unity_points_coords"] =unity_points #json.dumps( [] if len(unity_points) == 0 else unity_points  )
+            Data["unity_points_ids"] = unity_points_ids
+            Data["grading_table"] = []
+
+            all_data.append(Data)
+
+            # guardar al final del loop
+            cv2.imwrite(f"{working_path}/output_frame{frame_idx}.jpg", frame_render)
+            with open(f"{working_path}/output_stitches.json", "w") as f:
+                json.dump(all_data, f, indent=4)
+
+
+        except Exception as e:
+            print (f"Exception at exporting : {e}")
+
+        
+        #return SOP,Data
     #################################
     cap.release()
     cv2.destroyAllWindows()
