@@ -21,7 +21,7 @@ import helpers as helpers
 # ==================================================
 # Configuración
 # ==================================================
-
+VERSION = "Sewing V2.0 - 21st jan2025"
 IMAGE_2D_PATH = "SOP30-Lateral_B.png"
 MODEL_PATH = "edwards_insipiris_best_14jan.pt"
 
@@ -955,26 +955,11 @@ class SOP_Manager:
 
 def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED , ENABLED_CAM
-    # ==================================================
-    # Cargas
-    # ==================================================
-    if os.path.exists(video_path) is False:
-        print(f"Video file not found: {video_path}")
-        return
+    
 
-    cap = cv2.VideoCapture(video_path)
-   
-    ## sop30 = first frame = 10000
-    if (video_path == "/dev/video0"):
-        print("using real time camera")
-        step_frame = 1
-    else:   
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        step_frame = 2
     # ==================================================
     # Loop principal
-    # ==================================================
-   
+    # ==================================================   
     sop_Manager = SOP_Manager()
     action_mgr = sop_Manager.action_mgr
 
@@ -1001,6 +986,27 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
     all_data = []
 
     os.makedirs(working_path, exist_ok=True)
+
+    if video_path == "0":
+        video_path = 0  # Use camera
+
+    cap = cv2.VideoCapture(video_path)
+   
+    ## sop30 = first frame = 10000
+    if (video_path == "/dev/video0" or video_path == "0"):
+        print("using real time camera")
+        step_frame = 1
+    else:   
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        step_frame = 2
+    
+    # ==================================================
+    # Cargas
+    # ==================================================
+    if not cap.isOpened():
+        print(f"Video file not found: {video_path}")
+        return
+
 
     while cap.isOpened() and RUNNING_APP:
 
@@ -1168,7 +1174,7 @@ def parse_args():
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="5102", help="Port for exposing")
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation_10A_cut.mp4", help="Video source")
-    parser.add_argument("--device", default="", help="Video source")
+    parser.add_argument("--device", default="0", help="Video source")
 
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--start_frame", default=100, help="Enable testing")
@@ -1222,6 +1228,10 @@ def get_mp4_from_path(path: str) -> str | None:
 
 if __name__ == "__main__":
 
+    print("-------------------------------------")
+    print(VERSION)
+    print("-------------------------------------")
+    
     args = parse_args()
     print(args)
 
@@ -1229,8 +1239,6 @@ if __name__ == "__main__":
 
     if args.device != "":
         main_loop(args.device, args.monitor_id, args.start_frame)
-    elif not os.path.exists(args.src):
-        print("video file not found. exit")
     else:
         mp4File = get_mp4_from_path(args.src)
 
