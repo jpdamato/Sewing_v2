@@ -250,10 +250,10 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 
     print(f"\nCreando ventana de {WINDOW_WIDTH}x{WINDOW_HEIGHT}...")
     window = wm.create_window(
-        RESIZE_CAM_HEIGHT,
-        RESIZE_CAM_WIDTH,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
         "test_resize",
-        position=(monitor_id*WINDOW_WIDTH, 100),
+        position=(monitor_id*WINDOW_WIDTH, 0),
         maximized=MAXIMIZED,
         decorators=False,
     )
