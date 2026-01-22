@@ -219,6 +219,9 @@ def on_key(window, key, scancode, action, mods):
 
     if key == glfw.KEY_Q and action == glfw.PRESS:
         ENABLED_CAM = not ENABLED_CAM
+    
+    if key == glfw.KEY_T and action == glfw.PRESS:
+        tools.printAverageTimes()
 
     if key == glfw.KEY_ESCAPE and action == glfw.PRESS:
         glfw.set_window_should_close(window, True)
@@ -343,14 +346,12 @@ def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
 def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
     global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager
-    
     # ==================================================
     # Loop principal
     # ==================================================   
     sop_Manager = SOP_Manager(model_path = MODEL_PATH)
     action_mgr = sop_Manager.action_mgr
 
-        
     tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
     # Acción inicial
     current_action = action_mgr.set_action("sop10_1")
@@ -361,10 +362,8 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
     SOP = {"name": 0, "index":0, "step_order":0}
  
     review_mode = True
-
     paused = False
     last_frame = None
-
     all_data = []
 
     os.makedirs(working_path, exist_ok=True)
@@ -373,7 +372,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         video_path = 0  # Use camera
 
     cap = cv2.VideoCapture(video_path)
-   
+  
     ## sop30 = first frame = 10000
     if (video_path == "/dev/video0" or video_path == "0"):
         print("using real time camera")
@@ -389,6 +388,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         print(f"Video file not found: {video_path}")
         return
 
+    prev_time = time.perf_counter()
 
     while cap.isOpened() and RUNNING_APP:
 
@@ -414,13 +414,16 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         if has_rectangle:
             cv2.rectangle(frame, (870, 500), (1280, 1050), (0, 0, 0), -1)  # background for text
 
-        frame = translate_and_zoom(frame, zoom=ZOOM, dx=TX, dy=TY)
+        if abs(TX) > 0 or abs(TY)>0 or ZOOM != 1.0:
+            frame = translate_and_zoom(frame, zoom=ZOOM, dx=TX, dy=TY)
 
         ### estimate SOP
+        tools.startProcess("inference")
         SOP = sop_Manager.estimate_SOP(frame, frame_idx, None)
 
         ### run detections
         frame_render, map_2d, schema, detections = sop_Manager.run_frame(frame,frame_idx,tracker_mgr, review_mode)
+        tools.endProcess("inference")
 
         ### estimate orientation
         if SOP["name"] == "SOP30":
@@ -445,6 +448,24 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         # Composición final
         # ----------------------------------------------
         combined = np.hstack([frame_resized, right_stack])
+
+        # ---- timing ----
+        curr_time = time.perf_counter()
+        dt = curr_time - prev_time
+        prev_time = curr_time
+
+        fps = 1.0 / dt if dt > 0 else 0.0
+
+        # ---- texto ----
+        text_fps = f"FPS: {fps:.2f}"
+        text_dt = f"Infer time: {dt*1000:.1f} ms"
+
+        cv2.putText(            combined, text_fps,            (10, 30),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,            (0, 255, 0),            2,            cv2.LINE_AA        )
+
+        cv2.putText(            combined, text_dt,            (10, 60),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
+
         if not MAXIMIZED:
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
 
@@ -455,6 +476,9 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         if key == 27:
             RUNNING_APP = False
             break
+        elif key == ord('t'):  # +30 frames
+            tools.printAverageTimes()
+        
         elif key == ord('p'):  # +30 frames
             paused = not paused
         elif key == ord('f'):  # +30 frames

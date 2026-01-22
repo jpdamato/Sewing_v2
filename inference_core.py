@@ -690,6 +690,7 @@ class SOP_Manager:
         mask_cloth = None
         annotated = None
 
+        tools.startProcess("Yolo")
       #  
         if self.tracking <=0 :
             results = self.model.track(    frame,    persist=True,
@@ -706,6 +707,7 @@ class SOP_Manager:
             results = self.model.predict(frame, conf=0.3, verbose=False)[0]
             self.valid_tracks = []
 
+        tools.endProcess("Yolo")
         x1, y1, x2, y2 = 0, 0, 0, 0
         
         needle_masks = []
@@ -714,6 +716,7 @@ class SOP_Manager:
         self.detections = []
         
         #### compute cloth 
+        tools.startProcess("merge_cloth_masks")
         mask_cloth = tools.merge_cloth_masks(results, cloth_class_id=0, frame_shape=frame.shape)
         cloth_contour, cloth_box = tools.extract_cloth_contour_and_bbox(mask_cloth)
 
@@ -773,7 +776,11 @@ class SOP_Manager:
                         s.valid = False
                 self.detections.append(s)  
         
+        tools.endProcess("merge_cloth_masks")
+        
         ### calculate tracking
+        tools.startProcess("tracking")
+        
         if results.boxes.id is not None:
             boxes = results.boxes.xyxy.cpu().numpy()
         
@@ -798,7 +805,10 @@ class SOP_Manager:
                 self.selected_stitches[tid].track_id = tid
                 self.selected_stitches[tid].compute_features()
 
-
+        tools.endProcess("tracking")
+        
+        tools.startProcess("compute_ribs")
+        
         frame_render = frame.copy() ##results.plot()
        
         ribs = None
@@ -818,6 +828,10 @@ class SOP_Manager:
                 #print(f"Distancia media: {dist_px_mean:.2f} px")
             except Exception as e:
                 print(f"Exception computing grid: {e}")
+        
+        tools.endProcess("compute_ribs")
+        
+        tools.startProcess("post_process")
         map_2d =  self.action_mgr.texture
 
         yaw = self.action_mgr.current.yaw
@@ -836,32 +850,32 @@ class SOP_Manager:
                   inside_ratio_min=0.85, length_factor=2.5)
         else:
             self.hilos_ok = []
+        tools.endProcess("post_process")
+
+        
+        tools.startProcess("rendering")
 
         helpers.draw_helper_SOP10_Task16(frame_render, self.detections)
         # ----------------------------------------------
         # Render cilindro
         # ----------------------------------------------
         # Render cilindro usando la acción actual
-        if self.action_mgr.current.name == "sop10_1":
-            schema = helpers.draw_SOP10_1(needle_theta=yaw, needle_visible=needle_visible)
-        elif self.action_mgr.current.name == "sop30_1":
-            schema = helpers.draw_SOP30_1(needle_theta=yaw, needle_visible=needle_visible)
-
-        elif self.action_mgr.current.name == "sop30_2":
-            schema = helpers.draw_SOP30_2(needle_x_norm=(yaw % (2*np.pi)) / (2*np.pi), needle_visible=needle_visible)
-
+        schema =  np.zeros((400, 400, 3), dtype=np.uint8)
+        
         if annotated is not None:
             cv2.imshow("tracking", annotated)
 
         ###
         for det in self.detections :
             if det.name == "thread":
-                det.compute_intersection_contour(self.cloth_contours)
+             ## BUG JUAN
+             ##   det.compute_intersection_contour(self.cloth_contours)
                 det.draw(frame_render)
             else:
                 det.draw_contours(frame_render)
       
         self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
-
+        tools.endProcess("rendering")
+ 
         return frame_render, map_2d, schema, self.detections 
         

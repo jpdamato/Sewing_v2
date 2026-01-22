@@ -1,7 +1,50 @@
 import cv2
 import numpy as np
 import base64
+import time
+from collections import defaultdict
 
+# --- storage interno ---
+_process_start = {}
+_process_times = defaultdict(list)
+
+# ----------------------
+def startProcess(process_id: str):
+    """
+    Marca el inicio de un proceso
+    """
+    _process_start[process_id] = time.perf_counter()
+
+
+def endProcess(process_id: str):
+    """
+    Marca el fin de un proceso y guarda el tiempo
+    """
+    if process_id not in _process_start:
+        return
+
+    dt = time.perf_counter() - _process_start[process_id]
+    _process_times[process_id].append(dt)
+
+    del _process_start[process_id]
+
+
+def printAverageTimes(min_samples=1):
+    """
+    Imprime los tiempos promedio de cada proceso
+    """
+    print("\n--- Average process times ---")
+    for pid, times in _process_times.items():
+        if len(times) < min_samples:
+            continue
+
+        avg = sum(times) / len(times)
+        print(
+            f"{pid:20s} | "
+            f"avg: {avg*1000:7.2f} ms | "
+            f"samples: {len(times)}"
+        )
+        
 def serializeFrame(self, frame, resizeFactor = 1):
     scale = resizeFactor
     resizedFrame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) #Reduce frame size
