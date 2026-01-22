@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import base64
 
 def serializeFrame(self, frame, resizeFactor = 1):
     scale = resizeFactor
