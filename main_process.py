@@ -47,6 +47,9 @@ DEBUG = False
 CLASE_HILO = 6
 CLASE_TELA = 0
 
+ZOOM = 1.0
+TX = 0.0
+TY = 0.0
 kafka_data = {}
 kafka_instance = None
 
@@ -58,14 +61,18 @@ CORS(app)  # allow all origins
 
 @app.route("/overlay", methods=["POST"])
 def overlay_zoom():
+    global ZOOM , TX, TY , WORKSTATION_ID
+     # Check if the incoming request is JSON
+    if request.is_json:
+        parameters = request.json
+        WORKSTATION_ID = parameters.get("workstation_id", 0)
+        ZOOM = parameters.get("zoom_factor", 1.0) ## range 0.5 to 2.0   
+        TX = parameters.get("offset_x", 0) ### lateral offset X
+        TY = parameters.get("offset_y", 0) ### lateral offset Y
 
-    parameters = request.json
-    workstation_id = parameters.get("workstation_id", 0)
-    zoom_factor = parameters.get("zoom_factor", 1.0) ## range 0.5 to 2.0   
-    offset_x = parameters.get("offset_x", 0) ### lateral offset X
-    offset_y = parameters.get("offset_y", 0) ### lateral offset Y
-
-    return jsonify({"status": "overlay zoomed"})
+        return jsonify({"status": "overlay zoomed"})
+    else:
+        return "Content-Type must be application/json", 400
 
 @app.route("/main_alive", methods=["POST"])
 def main_alive():
@@ -201,7 +208,6 @@ def start_API(port):
     app.run(host="0.0.0.0", port=int(port), debug=False)
 
 
-
 def on_key(window, key, scancode, action, mods):
     global RUNNING_APP, GLOBAL_KEY_BOARD, ENABLED_CAM
     if action == glfw.PRESS:
@@ -252,9 +258,43 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 
     return wm
 
+def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
+    border_value=(0, 0, 0) ):
+    """
+    Aplica zoom centrado y traslación a una imagen.
+
+    Args:
+        image: np.ndarray (H,W,C)
+        zoom: float (>1 zoom in, <1 zoom out)
+        dx: int (pixeles en X)
+        dy: int (pixeles en Y)
+        border_value: color para huecos (default negro)
+
+    Returns:
+        transformed image
+    """
+
+    h, w = image.shape[:2]
+    cx, cy = w // 2, h // 2
+
+    # Matriz de zoom centrado
+    M_zoom = cv2.getRotationMatrix2D((cx, cy), 0, zoom)
+
+    # Agregar traslación
+    M_zoom[0, 2] += dx
+    M_zoom[1, 2] += dy
+
+    out = cv2.warpAffine(        image,
+        M_zoom,        (w, h),        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=border_value
+    )
+
+    return out
 
 def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
-    global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED , ENABLED_CAM , kafka_data
+    global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
+    global ZOOM , TX, TY , WORKSTATION_ID
     
     # ==================================================
     # Loop principal
@@ -327,9 +367,12 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             continue
 
         fh, fw = frame.shape[:2]
+        ### videos have a rectangle with data, i want to cover it
         if has_rectangle:
             cv2.rectangle(frame, (870, 500), (1280, 1050), (0, 0, 0), -1)  # background for text
-        
+
+        frame = translate_and_zoom(frame, zoom=ZOOM, dx=TX, dy=TY)
+
         ### estimate SOP
         SOP = sop_Manager.estimate_SOP(frame, frame_idx, None)
 
@@ -543,8 +586,8 @@ if __name__ == "__main__":
     args = parse_args()
     print(args)
     ### start API
-    port = args.port
-    t = threading.Thread(target=start_API, args=(port))
+
+    t = threading.Thread(target=start_API, args=(int(args.port),))
     t.daemon = True
     t.start()
 
