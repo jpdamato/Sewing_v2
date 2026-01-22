@@ -29,23 +29,6 @@ CLASE_HILO = 6
 CLASE_TELA = 0
 
 
-def draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=10, gap=6):
-    x1, y1 = pt1
-    x2, y2 = pt2
-
-    length = int(np.hypot(x2 - x1, y2 - y1))
-    for i in range(0, length, dash_len + gap):
-        start = i
-        end = min(i + dash_len, length)
-
-        xs = int(x1 + (x2 - x1) * start / length)
-        ys = int(y1 + (y2 - y1) * start / length)
-        xe = int(x1 + (x2 - x1) * end / length)
-        ye = int(y1 + (y2 - y1) * end / length)
-
-        cv2.line(img, (xs, ys), (xe, ye), color, thickness)
-
-
 def render_cylinder(texture, out_size=(400, 400),
                          yaw=0.0, tilt=0.0,
                          step_u=2, step_v=2):
@@ -633,7 +616,7 @@ def render_guideline(frame, hilos_contours, contorno_tela,
 ##############################################################333
 def get_front_end_data(nFrame,  frame, SOP):
     try:
-        sFrame = serializeFrame(None, frame, resizeFactor=0.5)
+        sFrame = tools.serializeFrame(None, frame, resizeFactor=0.5)
         Data = {}
         #### 
         Data["id"] = nFrame                    
@@ -854,7 +837,7 @@ class SOP_Manager:
         else:
             self.hilos_ok = []
 
-           
+        helpers.draw_helper_SOP10_Task16(frame_render, self.detections)
         # ----------------------------------------------
         # Render cilindro
         # ----------------------------------------------
@@ -877,13 +860,7 @@ class SOP_Manager:
                 det.draw(frame_render)
             else:
                 det.draw_contours(frame_render)
-       #### compute proposed guide line 
-        if x1 > 0:
-            line_x = x2 + 10  # 10 pixels below detected framework
-            y_start = y1 - 50
-            y_end = y2 + 50
-      #      draw_dashed_line(frame_render, (line_x, y_start), (line_x, y_end), (0, 255, 0), thickness=2, dash_len=15, gap=10)
-
+      
         self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
 
         return frame_render, map_2d, schema, self.detections 

@@ -62,6 +62,43 @@ def show_oriented_cloth(mask, img, is_maximized=False):
         cv2.imshow("Oriented Cloth", vis)
 
 
+def draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=10, gap=6):
+    x1, y1 = pt1
+    x2, y2 = pt2
+
+    length = int(np.hypot(x2 - x1, y2 - y1))
+    for i in range(0, length, dash_len + gap):
+        start = i
+        end = min(i + dash_len, length)
+
+        xs = int(x1 + (x2 - x1) * start / length)
+        ys = int(y1 + (y2 - y1) * start / length)
+        xe = int(x1 + (x2 - x1) * end / length)
+        ye = int(y1 + (y2 - y1) * end / length)
+
+        cv2.line(img, (xs, ys), (xe, ye), color, thickness)
+
+
+def draw_helper_SOP10_Task16(frame_render, detections):
+    x1, y1, x2, y2 = 0, 0, 0, 0
+    frame_work_found = False
+
+    for det in detections:
+        if det.name == "metal_framework":
+            x1, y1, x2, y2 = det.box
+            frame_work_found = True
+            break
+        if det.name == "cloth":
+            x1, y1, x2, y2 = det.box
+            break
+    ### render a guideline below metal framework
+    if frame_work_found:
+        line_x = x2 + 10  # 10 pixels below detected framework
+        y_start = y1 - 50
+        y_end = y2 + 50
+        draw_dashed_line(frame_render, (line_x, y_start), (line_x, y_end), (0, 255, 0), thickness=2, dash_len=15, gap=10)
+
+
 ################################################
 ### Render helpers
 def draw_SOP10_1(canvas_size=(400, 400), needle_theta=0.0, needle_visible=False):

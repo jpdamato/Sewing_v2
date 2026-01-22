@@ -52,6 +52,7 @@ TX = 0.0
 TY = 0.0
 kafka_data = {}
 kafka_instance = None
+sop_Manager = None
 
 ########################################################
 ###  Class for handling real time streaming usin REST methods
@@ -164,16 +165,17 @@ class Kafka:
 #########################
 ## run kafka in other thread
 def run_kafka_server():
-    global  RUNNING_APP, kafka_data , kafka_instance
+    global  RUNNING_APP, kafka_data , kafka_instance, WS_ID
     try:
         kafka_instance = Kafka()
         print ("Kafka server is RUNNING ")
     except:
         print ("Kafka server is not available ")
         kafka_instance = None
-    scale = FRAME_RESCALE
+    scale = 0.5
+
     while True:
-        if kafka_data["frame"] is not None and RUNNING_APP:
+        if "frame" in kafka_data and kafka_data["frame"] is not None and RUNNING_APP:
             try:
                 # Get the current time as a float (seconds since the epoch)
                 current_timestamp = time.time()
@@ -192,7 +194,7 @@ def run_kafka_server():
 
                 #Send message to Kafka
                 if kafka_instance is not None  :
-                    kafka_instance.produce_kafka_msg(msgKafkaStr, topic="ws"+WS_ID)
+                    kafka_instance.produce_kafka_msg(msgKafkaStr, topic="ws"+str(WS_ID))
                 # sleep for 500 ms
                 time.sleep(1)
             except Exception as e:
@@ -258,6 +260,52 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 
     return wm
 
+###################################################
+def run_glfw_loop( monitor_id=0):
+    global RUNNING_APP ,ENABLED_CAM , sop_Manager
+    
+    WINDOW_HEIGHT=1920
+    WINDOW_WIDTH = 1080
+    
+    print ("Loading GLFW window manager")
+    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id)
+    font = Font.get_font()
+    summary_drawer = Drawer(font, WINDOW_HEIGHT, WINDOW_WIDTH)
+    
+    while RUNNING_APP:
+        try:
+            ###  Draw using lib
+            summary_frame = np.zeros((WINDOW_WIDTH, WINDOW_HEIGHT, 3), dtype=np.uint8)
+
+            if sop_Manager is not None:
+                if ENABLED_CAM:
+                    summary_frame = cv2.resize(sop_Manager.original_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
+                for det in sop_Manager.detections:
+                    if det.name == "cloth":
+                        det.draw_contours(summary_frame, (255, 255, 255),width = 2)
+                    elif det.name == "thread":
+                        det.draw(summary_frame, (220, 55, 55),width = 2)
+            summary_frame = cv2.flip(summary_frame, 0)
+            summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
+            
+            if sop_Manager is not None:
+                if sop_Manager.tracking <= 0:
+                    summary_drawer.draw_text(summary_frame, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
+                else:
+                    summary_drawer.draw_text(summary_frame, "WORKING", 50, 50, (0, 255, 0), scale=3)
+                summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.selected_stitches)}", 50, 80, (0, 255, 0), scale=2)
+            
+            else:
+                summary_drawer.draw_text(summary_frame, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
+            wm.render("test_resize", summary_frame)
+            
+        except Exception as e:
+            print(f"Exception terminating GLFW: {e}")
+            pass
+
+    print ("Terminate rendering")
+    glfw.terminate()
+    
 def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
     border_value=(0, 0, 0) ):
     """
@@ -294,7 +342,7 @@ def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
 
 def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
-    global ZOOM , TX, TY , WORKSTATION_ID
+    global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager
     
     # ==================================================
     # Loop principal
@@ -302,11 +350,6 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
     sop_Manager = SOP_Manager(model_path = MODEL_PATH)
     action_mgr = sop_Manager.action_mgr
 
-    WINDOW_HEIGHT=720
-    WINDOW_WIDTH=1280
-    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id)
-    font = Font.get_font()
-    summary_drawer = Drawer(font, WINDOW_HEIGHT, WINDOW_WIDTH)
         
     tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
     # Acción inicial
@@ -356,7 +399,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             if not ret:
                 break
             
-        original_frame = frame.copy()
+        sop_Manager.original_frame = frame.copy()
         last_frame = frame.copy()
 
         frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -405,30 +448,6 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         if not MAXIMIZED:
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
 
-        ###  Draw using lib
-        summary_frame = np.zeros((RESIZE_CAM_HEIGHT, RESIZE_CAM_WIDTH, 3), dtype=np.uint8)
-
-        if ENABLED_CAM:
-            summary_frame = cv2.resize(original_frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
-        for det in detections:
-            if det.name == "cloth":
-                det.draw_contours(summary_frame, (255, 255, 255),width = 2)
-            elif det.name == "thread":
-                det.draw(summary_frame, (220, 55, 55),width = 2)
-        summary_frame = cv2.flip(summary_frame, 0)
-        summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
-        ####################################################################################
-        if sop_Manager.hilos_ok is not None and len(sop_Manager.hilos_ok) > 0 and len(sop_Manager.cloth_contours) > 0:
-              
-              #  render_guideline(summary_frame, sop_Manager.hilos_ok, sop_Manager.cloth_contours[0])
-            pass
-        if sop_Manager.tracking <= 0:
-            summary_drawer.draw_text(summary_frame, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
-        else:
-            summary_drawer.draw_text(summary_frame, "WORKING", 50, 50, (0, 255, 0), scale=3)
-
-        summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.selected_stitches)}", 50, 80, (0, 255, 0), scale=2)
-        wm.render("test_resize", summary_frame)
         # ----------------------------------------------
         # Controles
         # ----------------------------------------------
@@ -594,9 +613,15 @@ if __name__ == "__main__":
     ### start Kafka
     start_kafka_thread = threading.Thread(target=run_kafka_server)
     start_kafka_thread.daemon = True
+    start_kafka_thread.start()
 
-    
+    ### run GLFW in another thread
+    render_thread = threading.Thread(target=run_glfw_loop, args=(int(args.monitor_id),))
+    render_thread.daemon = True
+    render_thread.start()
+  
     MAXIMIZED = args.maximized
+    WS_ID = args.ws_id
 
     if args.debug in args:
         DEBUG = True
