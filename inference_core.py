@@ -693,7 +693,7 @@ class SOP_Manager:
         tools.startProcess("Yolo")
       #  
         if self.tracking <=0 :
-            results = self.model.track(    frame,    persist=True,
+            results = self.model.track(    frame,    persist=True, device='cuda',
                      conf=0.3,     classes=None,     # detecta todo
                         tracker="bytetrack.yaml",
                         verbose=False)[0]
