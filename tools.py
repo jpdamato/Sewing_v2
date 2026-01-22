@@ -1,6 +1,12 @@
 import cv2
 import numpy as np
 
+def serializeFrame(self, frame, resizeFactor = 1):
+    scale = resizeFactor
+    resizedFrame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) #Reduce frame size
+    _,buffer = cv2.imencode(".jpg", resizedFrame)
+    buffer_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')   #Serialized frame
+    return buffer_b64
 
 def flujo_denso(frame_prev, frame_curr,
                 pyr_scale=0.5, levels=3, winsize=15,
