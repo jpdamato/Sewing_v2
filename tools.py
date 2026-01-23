@@ -29,6 +29,51 @@ def endProcess(process_id: str):
     del _process_start[process_id]
 
 
+def is_straight_segment(    contour,
+    max_mean_error=2.0,    max_max_error=5.0,
+    min_aspect_ratio=5.0
+):
+    """
+    Decide si un contorno corresponde a un segmento recto.
+
+    Args:
+        contour: np.ndarray (N,1,2)
+        max_mean_error: error medio permitido (pixeles)
+        max_max_error: error máximo permitido
+        min_aspect_ratio: alargamiento mínimo
+
+    Returns:
+        True si es recto, False si es curvo
+    """
+
+    if contour is None or len(contour) < 10:
+        return False
+
+    pts = contour.reshape(-1, 2).astype(np.float32)
+
+    # --- filtro 1: alargamiento ---
+    x, y, w, h = cv2.boundingRect(pts)
+    aspect = max(w, h) / max(1, min(w, h))
+    if aspect < min_aspect_ratio:
+        return False
+
+    # --- ajuste de recta (PCA) ---
+    mean = pts.mean(axis=0)
+    U, S, Vt = np.linalg.svd(pts - mean)
+    direction = Vt[0]  # dirección principal
+
+    # --- distancia punto-recta ---
+    diffs = pts - mean
+    perp_dist = np.abs(
+        diffs[:, 0] * direction[1] -
+        diffs[:, 1] * direction[0]
+    )
+
+    mean_error = perp_dist.mean()
+    max_error = perp_dist.max()
+
+    return mean_error < max_mean_error and max_error < max_max_error
+
 def printAverageTimes(min_samples=1):
     """
     Imprime los tiempos promedio de cada proceso
@@ -274,6 +319,12 @@ def process_needle(needle_s, img):
 
 #################################################
 ###  Compute ribs
+def render_ribs(frame, ribs):
+    for hole in ribs:
+        cx, cy = hole
+        cv2.circle(frame, (int(cx), int(cy)), 2, (0,0,255), -1)
+
+
 def compute_ribs(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -301,10 +352,7 @@ def compute_ribs(frame):
     
     vis = frame.copy()
 
-    for hole in holes:
-        cx, cy = hole
-        cv2.circle(vis, (int(cx), int(cy)), 2, (0,0,255), -1)
-
+    render_ribs(vis, holes)
    # cv2.imshow("Huecos en tela segmentada", vis)
     return vis , holes
 
@@ -358,8 +406,11 @@ def merge_cloth_masks(result, cloth_class_id, frame_shape):
     masks = result.masks.data.cpu().numpy()  # (N, Hm, Wm)
     classes = result.boxes.cls.cpu().numpy().astype(int)
 
-    merged = np.zeros_like(masks[0], dtype=np.uint8)
-
+    if len(masks) > 0:
+        merged = np.zeros_like(masks[0], dtype=np.uint8)
+    else:
+        return None
+    
     for i, cls in enumerate(classes):
         if cls == cloth_class_id:
             merged |= (masks[i] > 0.5).astype(np.uint8)
@@ -368,8 +419,7 @@ def merge_cloth_masks(result, cloth_class_id, frame_shape):
     merged = cv2.resize(
         merged,
         (frame_shape[1], frame_shape[0]),
-        interpolation=cv2.INTER_NEAREST
-    )
+        interpolation=cv2.INTER_NEAREST    )
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,

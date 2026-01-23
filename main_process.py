@@ -35,8 +35,11 @@ VERSION = "Sewing V2.0 - 21st jan2025"
 IMAGE_2D_PATH = "SOP30-Lateral_B.png"
 MODEL_PATH = "edwards_insipiris_best_14jan.pt"
 
-RESIZE_CAM_WIDTH = 1280
-RESIZE_CAM_HEIGHT = 720
+PROCESSING_CAM_WIDTH = 1280
+PROCESSING_CAM_HEIGHT = 720
+
+RESIZE_CAM_WIDTH = 1920
+RESIZE_CAM_HEIGHT = 1080
 MAXIMIZED = False
 ENABLED_CAM = False
 
@@ -285,9 +288,13 @@ def run_glfw_loop( monitor_id=0):
                     summary_frame = cv2.resize(sop_Manager.original_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
                 for det in sop_Manager.detections:
                     if det.name == "cloth":
-                        det.draw_contours(summary_frame, (255, 255, 255),width = 2)
+                        det.draw_contours(summary_frame, (255, 255, 255),width = 1)
+                    elif det.name == "needle":
+                        det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
                     elif det.name == "thread":
-                        det.draw(summary_frame, (220, 55, 55),width = 2)
+                        ## only draw valid threads
+                        if det.valid:
+                            det.draw(summary_frame, (220, 55, 55),width = 2)
             summary_frame = cv2.flip(summary_frame, 0)
             summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
             
@@ -379,7 +386,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         step_frame = 1
     else:   
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        step_frame = 2
+        step_frame = 4
     
     # ==================================================
     # Cargas
@@ -404,16 +411,17 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
 
         frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-        frame = cv2.resize(frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
+        ### videos have a rectangle with data, i want to cover it
+        if has_rectangle:
+            cv2.rectangle(frame, (870, 500), (1280, 1050), (0, 0, 0), -1)  # background for text
+
+        frame = cv2.resize(frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
 
         if frame_idx % step_frame != 0:
             continue
 
         fh, fw = frame.shape[:2]
-        ### videos have a rectangle with data, i want to cover it
-        if has_rectangle:
-            cv2.rectangle(frame, (870, 500), (1280, 1050), (0, 0, 0), -1)  # background for text
-
+        
         if abs(TX) > 0 or abs(TY)>0 or ZOOM != 1.0:
             frame = translate_and_zoom(frame, zoom=ZOOM, dx=TX, dy=TY)
 
@@ -432,23 +440,24 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             framework_yaw = sop_Manager.estimate_orientation_sop10(frame, detections, frame_idx)
         
         SOP["orientation"] = framework_yaw
-        # ----------------------------------------------
-        # Ajuste de tamaños
-        # ----------------------------------------------
-        right_w = schema.shape[1]
+        # # ----------------------------------------------
+        # # Ajuste de tamaños
+        # # ----------------------------------------------
+        # right_w = schema.shape[1]
 
-        map_resized = cv2.resize(map_2d, (right_w, fh // 2))
-        cyl_resized = cv2.resize(schema, (right_w, fh // 2))
+        # map_resized = cv2.resize(map_2d, (right_w, fh // 2))
+        # cyl_resized = cv2.resize(schema, (right_w, fh // 2))
 
-        right_stack = np.vstack([map_resized, cyl_resized])
+        # right_stack = np.vstack([map_resized, cyl_resized])
 
-        frame_resized = cv2.resize(frame_render, (fw, fh))
+        # frame_resized = cv2.resize(frame_render, (fw, fh))
 
         # ----------------------------------------------
         # Composición final
         # ----------------------------------------------
-        combined = np.hstack([frame_resized, right_stack])
-
+        #combined = np.hstack([frame_resized, right_stack])
+        combined =  cv2.resize(frame_render, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
+        tools.render_ribs(combined,sop_Manager.ribs )
         # ---- timing ----
         curr_time = time.perf_counter()
         dt = curr_time - prev_time
@@ -459,11 +468,14 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         # ---- texto ----
         text_fps = f"FPS: {fps:.2f}"
         text_dt = f"Infer time: {dt*1000:.1f} ms"
+        text_dt = f"Infer time: {dt*1000:.1f} ms"
 
         cv2.putText(            combined, text_fps,            (10, 30),            cv2.FONT_HERSHEY_SIMPLEX,
             0.8,            (0, 255, 0),            2,            cv2.LINE_AA        )
 
         cv2.putText(            combined, text_dt,            (10, 60),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
+        cv2.putText(            combined, f"frame :{frame_idx}",            (10, 80),            cv2.FONT_HERSHEY_SIMPLEX,
             0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
 
         if not MAXIMIZED:
@@ -565,12 +577,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="5102", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation_10A_cut.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 10_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
 
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
-    parser.add_argument("--start_frame", default=100, help="Enable testing")
+    parser.add_argument("--start_frame", default=25100, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
    

@@ -332,7 +332,7 @@ class SegmentedObject:
         if len(contour) > 0:
             self.rect = cv2.minAreaRect(all_points)  # ((cx, cy), (w, h), angle)
         
-        self.box = cv2.boxPoints(self.rect)
+        self.box = box
         self.center, self.direction = contour_center_line(contour)
 
     def get_center_line(self, frame):
@@ -650,7 +650,7 @@ class SOP_Manager:
         self.sop_index = 10
         self.prev_cloth_frame = None
         self.detections = []
-
+        self.px_to_cm, self.cm_to_px, self.dist_px_mean = 0,0,0
         self.renderer = CylinderRenderer(eps=1e-3)
         self.action_mgr=ActionManager(ACTIONS)
         self.tracking=100
@@ -660,7 +660,9 @@ class SOP_Manager:
    
     def estimate_SOP(self, frame, frame_number, detections):
         best_conf = 0
+        ### Hardcoded SOP 10
         self.sop_index = 10
+        self.step_order = 16
 
         results = self.detections
 
@@ -670,8 +672,13 @@ class SOP_Manager:
             if det.name == "needle" or det.name == "scissors":
                 self.tracking += 1
                 break
+        #############################
+        if self.tracking <= 0 : 
+            self.step_order = 17
+        else:
+            self.step_order = 16
 
-        return {"name": f"SOP{self.sop_index}", "index": 0, "end": frame_number ,"step_order" :self.sop_index,"orientation" : 0,"rank":best_conf, "index" : self.sop_index}
+        return {"name": f"SOP{self.sop_index}", "index": 0, "end": frame_number ,"step_order" :self.step_order,"orientation" : 0,"rank":best_conf, "index" : self.sop_index}
     
     ################################################
     def estimate_orientation_sop30(self,frame, detections, index):
@@ -692,21 +699,17 @@ class SOP_Manager:
 
         tools.startProcess("Yolo")
       #  
-        if self.tracking <=0 :
-            results = self.model.track(    frame,    persist=True, device='cuda',
-                     conf=0.3,     classes=None,     # detecta todo
-                        tracker="bytetrack.yaml",
-                        verbose=False)[0]
-   
-                      # bbox de la tela
-           
-            annotated = results.plot()
-            #cv2.imshow("tracking", annotated)
-          
-        else:
-            results = self.model.predict(frame, conf=0.3, verbose=False)[0]
-            self.valid_tracks = []
+        results = self.model.track(    frame,    persist=True, 
+                #device='cuda',
+                    conf=0.3,     classes=None,     # detecta todo
+                    tracker="bytetrack.yaml",
+                    verbose=False)[0]
 
+                    # bbox de la tela
+        
+        annotated = results.plot()
+        #cv2.imshow("tracking", annotated)
+        
         tools.endProcess("Yolo")
         x1, y1, x2, y2 = 0, 0, 0, 0
         
@@ -714,7 +717,7 @@ class SOP_Manager:
         needle_contours = []
         cloth_contour = None
         self.detections = []
-        
+        self.cloth_visible = False
         #### compute cloth 
         tools.startProcess("merge_cloth_masks")
         mask_cloth = tools.merge_cloth_masks(results, cloth_class_id=0, frame_shape=frame.shape)
@@ -727,31 +730,27 @@ class SOP_Manager:
             self.detections.append(cloth)
         else:
             cloth = None
+            self.cloth_visible = False
         #### compute other contours        
         for i, cls_id in enumerate(results.boxes.cls):
             cls_name = self.model.names[int(cls_id)]
             mask_np = None
-            box = None
+            box = results.boxes.xyxy[i].cpu().numpy()
+
             if cls_name == "thread":
-                box = results.boxes.xyxy[i].cpu().numpy()
-                x1, y1, x2, y2 = map(int, box)
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
             if cls_name == "metal_framewpork":
-                box = results.boxes.xyxy[i].cpu().numpy()
-                x1, y1, x2, y2 = map(int, box)
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
             if cls_name == 'needle' and review_mode:
                 needle_visible = True
-                box = results.boxes.xyxy[i].cpu().numpy()
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
             if cls_name == "clothX":
                 mask = results.masks.data[i]
-                box = results.boxes.xyxy[i].cpu().numpy()
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 mask_cloth = cv2.resize(mask_np, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
                 
@@ -769,9 +768,10 @@ class SOP_Manager:
                     needle_masks.append(s)
                 ### check if thread is valid
                 if cls_name == "thread":
-                    valids = tools.filtrar_hilos_validos([cnt], cloth_contour)
-                    if len(valids) > 0:
-                        s.valid = True
+                    straight = tools.is_straight_segment([cnt])
+                   # valids = tools.filtrar_hilos_validos([cnt], cloth_contour)
+                    if (straight) : # and len(valids)>0:
+                        s.valid =True
                     else:
                         s.valid = False
                 self.detections.append(s)  
@@ -811,20 +811,20 @@ class SOP_Manager:
         
         frame_render = frame.copy() ##results.plot()
        
-        ribs = None
+        self.ribs = []
         ########## compute ribs
         if mask_cloth is not None:
             frame_cloth = cv2.bitwise_and(frame, frame, mask=mask_cloth)
-            frame_cloth, ribs = tools.compute_ribs(frame_cloth)
+            frame_cloth, self.ribs = tools.compute_ribs(frame_cloth)
             #### extract cloth
             helpers.show_oriented_cloth(mask_cloth, frame_cloth, is_maximized =maximized)
             
             #if  self.prev_cloth_frame is not None:
             #    frame_render, _, _, _, = flujo_denso(  self.prev_cloth_frame,   frame_cloth,   draw=True     )
 
-        if ribs is not None:
+        if self.ribs is not None:
             try:
-                px_to_cm, cm_to_px, dist_px_mean = estimate_pixel_to_cm(ribs, real_dist_mm=1.0, k=4)
+                self.px_to_cm, self.cm_to_px, self.dist_px_mean = estimate_pixel_to_cm(self.ribs, real_dist_mm=1.0, k=4)
                 #print(f"Distancia media: {dist_px_mean:.2f} px")
             except Exception as e:
                 print(f"Exception computing grid: {e}")
@@ -855,7 +855,10 @@ class SOP_Manager:
         
         tools.startProcess("rendering")
 
-        helpers.draw_helper_SOP10_Task16(frame_render, self.detections)
+        ### render helpers
+        if self.cloth_visible:
+            if self.step_order ==16:
+                helpers.draw_helper_SOP10_Task16(frame_render, self.detections ,self)
         # ----------------------------------------------
         # Render cilindro
         # ----------------------------------------------
@@ -870,7 +873,10 @@ class SOP_Manager:
             if det.name == "thread":
              ## BUG JUAN
              ##   det.compute_intersection_contour(self.cloth_contours)
-                det.draw(frame_render)
+                if det.valid :
+                    det.draw(frame_render, color = (0,255,0), width=2)
+                else:
+                    det.draw(frame_render, color = (0,0,255), width = 1)
             else:
                 det.draw_contours(frame_render)
       
