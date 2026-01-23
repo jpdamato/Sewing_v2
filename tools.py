@@ -242,7 +242,86 @@ def segment_from_mask(mask, shape):
         "length": max(w, h),
         "rect": rect
     }
+#########################################################
+def contour_main_axis(contour):
+    """
+    Devuelve centro y dirección principal del contorno
+    """
+    pts = contour.reshape(-1, 2).astype(np.float32)
 
+    mean = pts.mean(axis=0)
+    pts_centered = pts - mean
+
+    _, _, Vt = np.linalg.svd(pts_centered)
+    direction = Vt[0]  # eje principal
+
+    return mean, direction
+
+def generate_perpendicular_curve(
+    center,
+    main_dir,
+    perp_dir,
+    length=1200,
+    step=5,
+    curvature=0.002
+):
+    """
+    Genera puntos de una curva perpendicular suave
+    """
+    points = []
+
+    for s in np.arange(-length, length, step):
+        # desplazamiento principal para curvatura
+        offset = curvature * (s ** 2)
+
+        p = (
+            center
+            + s * perp_dir
+            + offset * main_dir
+        )
+        points.append(p)
+
+    return np.array(points, dtype=np.float32)
+
+def clip_curve_to_contour(curve_pts, contour):
+    inside = []
+
+    for p in curve_pts:
+        if cv2.pointPolygonTest(contour, tuple(p), False) >= 0:
+            inside.append(p)
+
+    if len(inside) < 2:
+        return None
+
+    return np.array(inside, dtype=np.int32)
+
+def contour_axes(contour):
+    pts = contour.reshape(-1, 2).astype(np.float32)
+    center = pts.mean(axis=0)
+
+    _, _, Vt = np.linalg.svd(pts - center)
+    main_dir = Vt[0]
+    perp_dir = np.array([-main_dir[1], main_dir[0]])  # rotado 90°
+
+    return center, main_dir, perp_dir
+#########################################################
+def line_contour_intersections(center, direction, contour, length=2000, step=1.0):
+    """
+    Devuelve los dos puntos donde la línea corta el contorno
+    """
+    pts_inside = []
+
+    for s in np.arange(-length, length, step):
+        p = center + s * direction
+        if cv2.pointPolygonTest(contour, tuple(p), False) >= 0:
+            pts_inside.append(p)
+
+    if len(pts_inside) < 2:
+        return None, None
+
+    return pts_inside[0], pts_inside[-1]
+
+#########################################################
 def are_colinear(seg1, seg2, angle_tol=5, dist_tol=15):
     # 1. Orientación similar
     if seg1 is None or seg2 is None:
@@ -259,11 +338,11 @@ def are_colinear(seg1, seg2, angle_tol=5, dist_tol=15):
     dist = abs(np.dot(seg2["center"] - seg1["center"], normal))
     return dist < dist_tol
 
-def merge_segments(segments):
+def merge_segments(needles):
     pts = []
 
-    for seg in segments:
-        rect = seg["rect"]
+    for needle in needles:
+        rect = needle.segment["rect"]
         box = cv2.boxPoints(rect)
         pts.extend(box)
 
@@ -288,34 +367,43 @@ def merge_segments(segments):
     return p1, p2
 def process_needle(needle_s, img):
     needle_segments = []
+    split_needle = []
 
-    for needle in needle_s:
-        needle_segments.append(needle.contour)
+    try:
+       
 
-    groups = []
-    used = set()
+        for needle in needle_s:
+            needle_segments.append(needle)
 
-    for i, s1 in enumerate(needle_segments):
-        if i in used:
-            continue
+        groups = []
+        used = set()
 
-        group = [s1]
-        used.add(i)
-
-        for j, s2 in enumerate(needle_segments):
-            if j in used:
+        for i, s1 in enumerate(needle_segments):
+            if i in used:
                 continue
-            if are_colinear(s1, s2):
-                group.append(s2)
-                used.add(j)
 
-        groups.append(group)
+            group = [s1]
+            used.add(i)
 
-    for group in groups:
-        if len(group) >= 2:
-            p1, p2 = merge_segments(group)
-            cv2.line(img, p1, p2, (0,255,0), 3)
+            for j, s2 in enumerate(needle_segments):
+                if j in used:
+                    continue
+                if are_colinear(s1.segment, s2.segment):
+                    group.append(s2)
+                    used.add(j)
 
+            groups.append(group)
+
+        
+        for group in groups:
+            if len(group) >= 2:
+                p1, p2 = merge_segments(group)
+                split_needle.append([p1,p2, group])
+                cv2.line(img, p1, p2, (0,255,0), 3)
+    except  :
+        print ("Error at computing segments")
+
+    return split_needle
 
 #################################################
 ###  Compute ribs

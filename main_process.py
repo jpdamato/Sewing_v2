@@ -270,43 +270,57 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 def run_glfw_loop( monitor_id=0):
     global RUNNING_APP ,ENABLED_CAM , sop_Manager
     
-    WINDOW_HEIGHT=1920
-    WINDOW_WIDTH = 1080
+    WINDOW_HEIGHT= 1080
+    WINDOW_WIDTH = 1920
     
     print ("Loading GLFW window manager")
-    wm=load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=monitor_id)
+    wm=load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
     font = Font.get_font()
-    summary_drawer = Drawer(font, WINDOW_HEIGHT, WINDOW_WIDTH)
+    summary_drawer = Drawer(font, WINDOW_WIDTH, WINDOW_HEIGHT)
     
     while RUNNING_APP:
         try:
             ###  Draw using lib
-            summary_frame = np.zeros((WINDOW_WIDTH, WINDOW_HEIGHT, 3), dtype=np.uint8)
+            summary_frame = np.zeros((PROCESSING_CAM_HEIGHT,PROCESSING_CAM_WIDTH , 3), dtype=np.uint8)
 
             if sop_Manager is not None:
                 if ENABLED_CAM:
-                    summary_frame = cv2.resize(sop_Manager.original_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
+                    summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
                 for det in sop_Manager.detections:
-                    if det.name == "cloth":
-                        det.draw_contours(summary_frame, (255, 255, 255),width = 1)
-                    elif det.name == "needle":
+                  #  if det.name == "cloth":
+                  #      det.draw_contours(summary_frame, (255, 255, 255),width = 1)
+                    if det.name == "needle":
                         det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
                     elif det.name == "thread":
                         ## only draw valid threads
                         if det.valid:
                             det.draw(summary_frame, (220, 55, 55),width = 2)
+            
+            if sop_Manager is not None:
+                tools.render_ribs(summary_frame,sop_Manager.ribs )
+
+            
+                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours, curvature = -0.002)
+
+               
+            cv2.imshow("summary_frame", summary_frame)
+            
             summary_frame = cv2.flip(summary_frame, 0)
             summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
             
+            summary_frame = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
+
             if sop_Manager is not None:
                 if sop_Manager.tracking <= 0:
                     summary_drawer.draw_text(summary_frame, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
                 else:
                     summary_drawer.draw_text(summary_frame, "WORKING", 50, 50, (0, 255, 0), scale=3)
-                summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.selected_stitches)}", 50, 80, (0, 255, 0), scale=2)
+                summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
             
             else:
                 summary_drawer.draw_text(summary_frame, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
+         
+            
             wm.render("test_resize", summary_frame)
             
         except Exception as e:
@@ -386,7 +400,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         step_frame = 1
     else:   
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        step_frame = 4
+        step_frame = 10
     
     # ==================================================
     # Cargas
@@ -416,6 +430,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             cv2.rectangle(frame, (870, 500), (1280, 1050), (0, 0, 0), -1)  # background for text
 
         frame = cv2.resize(frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
+        
 
         if frame_idx % step_frame != 0:
             continue
@@ -457,7 +472,20 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         # ----------------------------------------------
         #combined = np.hstack([frame_resized, right_stack])
         combined =  cv2.resize(frame_render, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
-        tools.render_ribs(combined,sop_Manager.ribs )
+        
+        if len(sop_Manager.ribs) > 10:
+            tools.render_ribs(combined,sop_Manager.ribs )
+
+            
+            helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours, curvature = -0.002)
+
+            #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
+            #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
+
+            #if ellipse is not None:
+            #    if helpers.ellipse_inside_contour(ellipse, sop_Manager.cloth_contours):
+            #        helpers.draw_dashed_ellipse(  combined,  ellipse,   color=(255, 255, 0),
+            #                thickness=2,   dash_length=12,    gap_length=8)
         # ---- timing ----
         curr_time = time.perf_counter()
         dt = curr_time - prev_time

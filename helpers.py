@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-
+import tools as tools
 
 def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
     h, w = image.shape[:2]
@@ -22,7 +22,98 @@ def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=border)
 
+def draw_dotted_curve(img, points, color=(0, 255, 255),
+                      thickness=2, dash_len=8, gap_len=6):
+    """
+    Dibuja una curva punteada a partir de una lista de puntos (Nx2)
+    """
+    draw = True
+    acc_len = 0.0
+
+    for i in range(1, len(points)):
+        p0 = points[i - 1]
+        p1 = points[i]
+
+        seg_len = np.linalg.norm(p1 - p0)
+        acc_len += seg_len
+
+        if draw:
+            cv2.line(
+                img,
+                tuple(p0.astype(int)),
+                tuple(p1.astype(int)),
+                color,
+                thickness,
+                cv2.LINE_AA
+            )
+
+        if draw and acc_len >= dash_len:
+            draw = False
+            acc_len = 0.0
+        elif not draw and acc_len >= gap_len:
+            draw = True
+            acc_len = 0.0
+
+def render_perpendicular_curved_guideline(
+    image,
+    contour,
+    color=(0, 255, 255),
+    thickness=2,
+    curvature=0.002
+):
+    center, main_dir, perp_dir = tools.contour_axes(contour)
+
+    curve = tools.generate_perpendicular_curve(
+        center,
+        main_dir,
+        perp_dir,
+        curvature=curvature
+    )
+
+    clipped = tools.clip_curve_to_contour(curve, contour)
+
+    if clipped is None:
+        return
+
+    draw_dotted_curve(image, clipped)
+    #cv2.polylines(        image,        [clipped],        isClosed=False,        color=color,
+    #    thickness=thickness,        lineType=cv2.LINE_AA    )
 #############################################################
+def draw_dashed_ellipse(
+    img,    ellipse,
+    color=(0, 255, 0),    thickness=2,    dash_length=10,
+    gap_length=6,    samples=200):
+    """
+    Dibuja una elipse punteada (dashed).
+
+    ellipse: ((cx, cy), (MA, ma), angle)
+    """
+
+    (cx, cy), (MA, ma), angle = ellipse
+
+    # muestrear elipse
+    t = np.linspace(0, 2*np.pi, samples)
+
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+
+    pts = []
+    for ti in t:
+        x = (MA / 2) * np.cos(ti)
+        y = (ma / 2) * np.sin(ti)
+
+        xr = x * cos_a - y * sin_a + cx
+        yr = x * sin_a + y * cos_a + cy
+
+        pts.append((int(xr), int(yr)))
+
+    # dibujar segmentos alternados
+    i = 0
+    while i < len(pts) - 1:
+        j = min(i + dash_length, len(pts) - 1)
+        cv2.line(img, pts[i], pts[j], color, thickness, cv2.LINE_AA)
+        i += dash_length + gap_length
+
 def show_oriented_cloth(mask, img, is_maximized=False):
    
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -62,6 +153,58 @@ def show_oriented_cloth(mask, img, is_maximized=False):
         cv2.imshow("Oriented Cloth", vis)
 
 
+def fit_robust_ellipse(points, keep_ratio=0.9):
+    """
+    Ajusta una elipse usando el % central de los puntos
+    """
+    if len(points) < 20:
+        return None
+
+    pts = points.reshape(-1, 1, 2).astype(np.float32)
+
+    ellipse = cv2.fitEllipse(pts)
+    (cx, cy), (MA, ma), angle = ellipse
+
+    # medir distancia normalizada a la elipse
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+
+    dx = points[:, 0] - cx
+    dy = points[:, 1] - cy
+
+    x_rot = dx * cos_a + dy * sin_a
+    y_rot = -dx * sin_a + dy * cos_a
+
+    d = (x_rot / (MA / 2))**2 + (y_rot / (ma / 2))**2
+
+    # quedarnos con los más cercanos
+    thresh = np.quantile(d, keep_ratio)
+    inliers = points[d <= thresh]
+
+    if len(inliers) < 20:
+        return ellipse
+
+    return cv2.fitEllipse(inliers.reshape(-1, 1, 2))
+
+def ellipse_inside_contour(ellipse, contour, samples=72):
+    (cx, cy), (MA, ma), angle = ellipse
+
+    theta = np.linspace(0, 2*np.pi, samples)
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+
+    for t in theta:
+        x = (MA/2) * np.cos(t)
+        y = (ma/2) * np.sin(t)
+
+        xr = x * cos_a - y * sin_a + cx
+        yr = x * sin_a + y * cos_a + cy
+
+        if cv2.pointPolygonTest(contour, (xr, yr), False) < 0:
+            return False
+
+    return True
+
 def draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=10, gap=6):
     x1, y1 = pt1
     x2, y2 = pt2
@@ -95,7 +238,7 @@ def draw_helper_SOP10_Task16(frame_render, detections , sop_maanager):
             break
         if det.name == "cloth":
             x1, y1, x2, y2 = det.box
-            
+
             break
 
     ### render a guideline below metal framework

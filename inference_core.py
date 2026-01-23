@@ -3,12 +3,9 @@ import numpy as np
 from ultralytics import YOLO
 from types import SimpleNamespace
 from ultralytics.trackers.byte_tracker import BYTETracker
-import json
 from dataclasses import dataclass
-import argparse
 import json
-import base64
-import glfw
+
 import math
 from scipy.spatial import cKDTree
 from scipy.interpolate import splprep, splev
@@ -18,6 +15,7 @@ from frame_renderer.drawer import Drawer
 from frame_renderer.fonts import Font
 import tools as tools
 import helpers as helpers
+import time
 # ==================================================
 # Configuración
 # ==================================================
@@ -415,6 +413,23 @@ class Stitch(SegmentedObject):
     
     def compute_features(self):
         pass
+
+class StitchEvent:
+    def __init__(self, event_id, start_frame, frame, segment):
+        self.event_id = event_id
+        self.start_frame = start_frame
+        self.frames = [start_frame]
+        self.start_time = time.perf_counter()
+        self.last_time = self.start_time
+        self.frame = frame
+        self.segment =segment
+
+    def add_frame(self, frame_number):
+        self.frames.append(frame_number)
+        self.last_time = time.perf_counter()
+
+    def is_expired(self, timeout_sec):
+        return (time.perf_counter() - self.last_time) > timeout_sec
 #
 def draw_segmentation(frame, result, model, alpha=0.4):
     overlay = frame.copy()
@@ -648,12 +663,17 @@ class SOP_Manager:
         self.yaw = 0.20
         self.tilt = 0.20
         self.sop_index = 10
+        
         self.prev_cloth_frame = None
         self.detections = []
         self.px_to_cm, self.cm_to_px, self.dist_px_mean = 0,0,0
         self.renderer = CylinderRenderer(eps=1e-3)
         self.action_mgr=ActionManager(ACTIONS)
         self.tracking=100
+        ### handle stitches events
+        self.stitches_events = []
+        self.active_event =None
+        self.timeout_sec = 5.0
         
         self.selected_stitches = {}
     
@@ -756,7 +776,8 @@ class SOP_Manager:
                 
                 #frame = draw_segmentation(frame, results, model)
             if mask_np is not None:
-                cnt = tools.segment_from_mask(mask_np, frame.shape)["contour"]
+                segment =  tools.segment_from_mask(mask_np, frame.shape)
+                cnt =segment["contour"]
                 if len(cnt) == 0:
                     continue
                 s = SegmentedObject(  box=box,  contour=cnt,name=cls_name,  color=(0, 255, 0)   )
@@ -766,6 +787,7 @@ class SOP_Manager:
 
                 if cls_name == "needle":
                     needle_masks.append(s)
+                    s.segment = segment
                 ### check if thread is valid
                 if cls_name == "thread":
                     straight = tools.is_straight_segment([cnt])
@@ -825,6 +847,7 @@ class SOP_Manager:
         if self.ribs is not None:
             try:
                 self.px_to_cm, self.cm_to_px, self.dist_px_mean = estimate_pixel_to_cm(self.ribs, real_dist_mm=1.0, k=4)
+              
                 #print(f"Distancia media: {dist_px_mean:.2f} px")
             except Exception as e:
                 print(f"Exception computing grid: {e}")
@@ -837,9 +860,27 @@ class SOP_Manager:
         yaw = self.action_mgr.current.yaw
         tilt = self.action_mgr.current.tilt
         
-        if not review_mode:
-            tools.process_needle(needle_masks, frame_render)
+        ### stitch event
+        if len(needle_masks)>1:
+            possible_stitches = tools.process_needle(needle_masks, frame_render)
 
+            if len(possible_stitches)>0:
+                if self.active_event is None:
+                    # crear nuevo evento
+                    self.active_event = StitchEvent(len(self.stitches_events), frame_number,frame,possible_stitches)
+                    cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
+                else:
+                    # continuar evento
+                    self.active_event.add_frame(frame_number)
+
+        # ---- chequear expiración ----
+        if self.active_event is not None:
+            if self.active_event.is_expired(self.timeout_sec):
+               # self.closed_events.append(self.active_event)
+                self.stitches_events.append(self.active_event)
+                self.active_event = None
+        
+        #################################################################
         thread_contours = [n.contour for n in self.detections if n.name == "thread"]
         self.cloth_contours = cloth_contour
         
