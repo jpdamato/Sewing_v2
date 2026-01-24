@@ -54,9 +54,65 @@ def draw_dotted_curve(img, points, color=(0, 255, 255),
             draw = True
             acc_len = 0.0
 
+def offset_curve(curve_pts, direction, offset_px):
+    """
+    Desplaza una curva en la dirección dada
+
+    curve_pts: (N,2)
+    direction: vector unitario (2,)
+    offset_px: pixeles (+ o -)
+    """
+    direction = direction / np.linalg.norm(direction)
+    return curve_pts + offset_px * direction
+
+def render_event_strip(event_frames,
+                       scale=0.3,
+                       max_height=None,
+                       bg_color=(0, 0, 0)):
+    """
+    event_frames: lista de imágenes (BGR)
+    scale: factor de escala (ej: 0.3)
+    max_height: fuerza una altura común (opcional)
+    """
+
+    resized = []
+
+    for event in event_frames:
+        if event.frame is None:
+            continue
+
+        h, w = event.frame.shape[:2]
+
+        if max_height is not None:
+            scale = max_height / h
+
+        new_size = (int(w * scale), int(h * scale))
+        small = cv2.resize(event.frame, new_size, interpolation=cv2.INTER_AREA)
+        resized.append(small)
+
+    if not resized:
+        return None
+
+    # --- igualar alturas (por seguridad)
+    max_h = max(img.shape[0] for img in resized)
+
+    padded = []
+    for img in resized:
+        h, w = img.shape[:2]
+        if h < max_h:
+            pad = max_h - h
+            img = cv2.copyMakeBorder(
+                img, 0, pad, 0, 0,
+                cv2.BORDER_CONSTANT,
+                value=bg_color
+            )
+        padded.append(img)
+
+    return cv2.hconcat(padded)
+
 def render_perpendicular_curved_guideline(
     image,
-    contour,
+    contour,offset = 0,
     color=(0, 255, 255),
     thickness=2,
     curvature=0.002
@@ -75,7 +131,10 @@ def render_perpendicular_curved_guideline(
     if clipped is None:
         return
 
-    draw_dotted_curve(image, clipped)
+    if offset != 0:
+        clipped = offset_curve(    clipped,    main_dir, offset_px=offset )
+
+    draw_dotted_curve(image, clipped, color)
     #cv2.polylines(        image,        [clipped],        isClosed=False,        color=color,
     #    thickness=thickness,        lineType=cv2.LINE_AA    )
 #############################################################

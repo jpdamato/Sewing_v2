@@ -854,7 +854,7 @@ class SOP_Manager:
         
         tools.endProcess("compute_ribs")
         
-        tools.startProcess("post_process")
+        tools.startProcess("post_process1")
         map_2d =  self.action_mgr.texture
 
         yaw = self.action_mgr.current.yaw
@@ -879,7 +879,9 @@ class SOP_Manager:
                # self.closed_events.append(self.active_event)
                 self.stitches_events.append(self.active_event)
                 self.active_event = None
-        
+        tools.endProcess("post_process1")
+
+        tools.startProcess("post_process2")
         #################################################################
         thread_contours = [n.contour for n in self.detections if n.name == "thread"]
         self.cloth_contours = cloth_contour
@@ -891,7 +893,7 @@ class SOP_Manager:
                   inside_ratio_min=0.85, length_factor=2.5)
         else:
             self.hilos_ok = []
-        tools.endProcess("post_process")
+        tools.endProcess("post_process2")
 
         
         tools.startProcess("rendering")

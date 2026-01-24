@@ -46,6 +46,7 @@ ENABLED_CAM = False
 GLOBAL_KEY_BOARD =   0
 RUNNING_APP = True
 DEBUG = False
+RUN_OVERLAY = False
 
 CLASE_HILO = 6
 CLASE_TELA = 0
@@ -277,13 +278,15 @@ def run_glfw_loop( monitor_id=0):
     wm=load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
     font = Font.get_font()
     summary_drawer = Drawer(font, WINDOW_WIDTH, WINDOW_HEIGHT)
-    
+    ###  Draw using lib
+    summary_frame = np.zeros((PROCESSING_CAM_HEIGHT,PROCESSING_CAM_WIDTH , 3), dtype=np.uint8)
+
     while RUNNING_APP:
         try:
-            ###  Draw using lib
-            summary_frame = np.zeros((PROCESSING_CAM_HEIGHT,PROCESSING_CAM_WIDTH , 3), dtype=np.uint8)
-
-            if sop_Manager is not None:
+            tools.startProcess("glfw")
+            summary_frame[:] = 0 
+           
+            if sop_Manager is not None and sop_Manager.original_frame is not None:
                 if ENABLED_CAM:
                     summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
                 for det in sop_Manager.detections:
@@ -296,33 +299,34 @@ def run_glfw_loop( monitor_id=0):
                         if det.valid:
                             det.draw(summary_frame, (220, 55, 55),width = 2)
             
-            if sop_Manager is not None:
-                tools.render_ribs(summary_frame,sop_Manager.ribs )
-
+            if sop_Manager is not None and sop_Manager.cloth_contours is not None:
             
-                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours, curvature = -0.002)
+                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(0,255,255),offset=0, curvature = -0.002)
+                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(255,0,),offset=100, curvature = -0.002)
 
+              
                
-            cv2.imshow("summary_frame", summary_frame)
+           # cv2.imshow("summary_frame", summary_frame)
             
             summary_frame = cv2.flip(summary_frame, 0)
             summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
             
-            summary_frame = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
+            summary_frame_final = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
             if sop_Manager is not None:
                 if sop_Manager.tracking <= 0:
-                    summary_drawer.draw_text(summary_frame, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
+                    summary_drawer.draw_text(summary_frame_final, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
                 else:
-                    summary_drawer.draw_text(summary_frame, "WORKING", 50, 50, (0, 255, 0), scale=3)
-                summary_drawer.draw_text(summary_frame, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
+                    summary_drawer.draw_text(summary_frame_final, "WORKING", 50, 50, (0, 255, 0), scale=3)
+                summary_drawer.draw_text(summary_frame_final, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
             
             else:
-                summary_drawer.draw_text(summary_frame, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
+                summary_drawer.draw_text(summary_frame_final, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
          
             
-            wm.render("test_resize", summary_frame)
-            
+            wm.render("test_resize", summary_frame_final)
+            tools.endProcess("glfw")
+           
         except Exception as e:
             print(f"Exception terminating GLFW: {e}")
             pass
@@ -448,6 +452,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         frame_render, map_2d, schema, detections = sop_Manager.run_frame(frame,frame_idx,tracker_mgr, review_mode)
         tools.endProcess("inference")
 
+        tools.startProcess("orientation")
         ### estimate orientation
         if SOP["name"] == "SOP30":
             framework_yaw = sop_Manager.estimate_orientation_sop30(frame, detections, frame_idx)
@@ -478,6 +483,7 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
 
             
             helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours, curvature = -0.002)
+            helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
 
             #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
             #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
@@ -486,6 +492,8 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             #    if helpers.ellipse_inside_contour(ellipse, sop_Manager.cloth_contours):
             #        helpers.draw_dashed_ellipse(  combined,  ellipse,   color=(255, 255, 0),
             #                thickness=2,   dash_length=12,    gap_length=8)
+        tools.endProcess("orientation")
+        
         # ---- timing ----
         curr_time = time.perf_counter()
         dt = curr_time - prev_time
@@ -509,6 +517,10 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         if not MAXIMIZED:
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
 
+        if (len (sop_Manager.stitches_events) > 0):
+            strip = helpers.render_event_strip(sop_Manager.stitches_events, scale = 0.2)
+            if strip is not None:
+                cv2.imshow("Eventos", strip)
         # ----------------------------------------------
         # Controles
         # ----------------------------------------------
@@ -610,6 +622,7 @@ def parse_args():
     parser.add_argument("--debug", default="", help="Run debug")
 
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
+    parser.add_argument("--overlay", default=False, help="Monitor ID")
     parser.add_argument("--start_frame", default=25100, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
@@ -670,6 +683,13 @@ if __name__ == "__main__":
     print(args)
     ### start API
 
+    MAXIMIZED = args.maximized
+    WS_ID = args.ws_id
+    RUN_OVERLAY = args.overlay
+    if args.debug in args:
+        DEBUG = True
+
+    ## RUN API
     t = threading.Thread(target=start_API, args=(int(args.port),))
     t.daemon = True
     t.start()
@@ -680,15 +700,12 @@ if __name__ == "__main__":
     start_kafka_thread.start()
 
     ### run GLFW in another thread
-    render_thread = threading.Thread(target=run_glfw_loop, args=(int(args.monitor_id),))
-    render_thread.daemon = True
-    render_thread.start()
-  
-    MAXIMIZED = args.maximized
-    WS_ID = args.ws_id
-
-    if args.debug in args:
-        DEBUG = True
+    if args.overlay == True:
+        render_thread = threading.Thread(target=run_glfw_loop, args=(int(args.monitor_id),))
+        render_thread.daemon = True
+        render_thread.start()
+    
+    
 
     if args.device != "":
         main_loop(args.device, args.monitor_id, args.start_frame)
