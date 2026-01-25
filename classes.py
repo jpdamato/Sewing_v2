@@ -224,9 +224,11 @@ class Stitch(SegmentedObject):
         self.distances = [] # distance to centerline. Close to 0 is long
         self.std = 0
         self.avg = 0
+        self.length = self.rect
         self.normalized_length = 0
         self.distance_to_prev_stitch = 0
         self.skeleton_points = []
+        self.get_center_line()
        
        
     def angle(self):

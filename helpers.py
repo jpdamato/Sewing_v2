@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import tools as tools
+import platform
 
 def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
     h, w = image.shape[:2]
@@ -117,6 +118,9 @@ def render_perpendicular_curved_guideline(
     thickness=2,
     curvature=0.002
 ):
+    if contour is None:
+        return
+    
     center, main_dir, perp_dir = tools.contour_axes(contour)
 
     curve = tools.generate_perpendicular_curve(
@@ -208,7 +212,8 @@ def show_oriented_cloth(mask, img, is_maximized=False):
         0.8,
         (0,255,0),
         2)
-    if not is_maximized:
+    
+    if platform.system() == "Windows":
         cv2.imshow("Oriented Cloth", vis)
 
 

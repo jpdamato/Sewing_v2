@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 
 import math
+import platform
 from scipy.spatial import cKDTree
 from scipy.interpolate import splprep, splev
 import os
@@ -16,7 +17,7 @@ from frame_renderer.fonts import Font
 import tools as tools
 import helpers as helpers
 import time
-from classes import StitchEvent, StitchingAction, SegmentedObject, CylinderRenderer, ActionManager
+from classes import StitchEvent, StitchingAction, SegmentedObject, CylinderRenderer, ActionManager , TrackerManager
 
 # ==================================================
 # Configuración
@@ -482,6 +483,10 @@ class SOP_Manager:
         self.timeout_sec = 5.0
         
         self.tracked_stitches = {}
+        self.tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
+        # Acción inicial
+        self.current_action = self.action_mgr.set_action("sop10_1")
+
     
    
     def estimate_SOP(self, frame, frame_number, detections,  sop_index):
@@ -521,52 +526,135 @@ class SOP_Manager:
 
         return index / 1000
     
+    def run_frame(self, SOP,frame,frame_number,  review_mode, maximized = False):
+        
+        prev_time = time.perf_counter()
+        tools.startProcess("inference")
+
+        ### run detections
+        if SOP["name"] == "SOP30":
+            frame_render, _, _, detections = self.run_frame30(frame,frame_number, review_mode)
+            framework_yaw = self.estimate_orientation_sop30(frame, detections, frame_number)
+        else:
+            frame_render, _, _, detections = self.run_frame10(frame,frame_number, review_mode)
+       
+            framework_yaw = self.estimate_orientation_sop10(frame, detections, frame_number)
+        tools.endProcess("inference")
+
+        tools.startProcess("orientation")
+            
+        
+        SOP["orientation"] = framework_yaw
+      
+        # ----------------------------------------------
+        # Composición final
+        # ----------------------------------------------
+        #combined = np.hstack([frame_resized, right_stack])
+        combined =  frame_render.copy()
+        
+        if len(self.ribs) > 10:
+            tools.render_ribs(combined,self.ribs )
+
+        ### SOP 10 Helpers
+        if SOP["name"] == "SOP10":   
+            if self.cloth_contours is not None:
+                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours, curvature = -0.002)
+            helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
+
+            #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
+            #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
+
+            #if ellipse is not None:
+            #    if helpers.ellipse_inside_contour(ellipse, sop_Manager.cloth_contours):
+            #        helpers.draw_dashed_ellipse(  combined,  ellipse,   color=(255, 255, 0),
+            #                thickness=2,   dash_length=12,    gap_length=8)
+        tools.endProcess("orientation")
+
+        # ---- timing ----
+        curr_time = time.perf_counter()
+        dt = curr_time - prev_time
+        prev_time = curr_time
+
+        fps = 1.0 / dt if dt > 0 else 0.0
+
+        # ---- texto ----
+        text_fps = f"FPS: {fps:.2f}"
+        text_dt = f"Infer time: {dt*1000:.1f} ms"
+        text_dt = f"Infer time: {dt*1000:.1f} ms"
+
+        cv2.putText(            combined, text_fps,            (10, 30),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,            (0, 255, 0),            2,            cv2.LINE_AA        )
+
+        cv2.putText(            combined, text_dt,            (10, 60),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
+        cv2.putText(            combined, f"frame :{frame_number}",            (10, 80),            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
+
+        
+        if  platform.system() == "Windows":
+            cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
+
+        if (len (self.stitches_events) > 0):
+            strip = helpers.render_event_strip(self.stitches_events, scale = 0.2)
+            if strip is not None and platform.system() == "Windows":
+                cv2.imshow("Eventos", strip)
+
+        return combined
+
     def run_frame30(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
         tools.startProcess("Yolo")
       #  
-        results = self.model.predict(frame, conf=conf, verbose=False)
+        results = self.model.predict(frame, conf=0.3, verbose=False)
+        tools.endProcess("Yolo")
+        
 
+        tools.startProcess("Segmentation")
                     # bbox de la tela
         self.detections = []
         self.scissors = False
         #### compute other contours        
-        for i, cls_id in enumerate(results.boxes.cls):
-            cls_name = self.model.names[int(cls_id)]
-
-            if cls_name == "scissors":
-                self.scissors = True
+        for result in results:
+            if result.masks is None:
+                continue
                 
-
-            mask_np = None
-            box = results.boxes.xyxy[i].cpu().numpy()
-            if results.masks is not None:
-                mask = results.masks.data[i]
-                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
+            boxes = result.boxes
+            masks = result.masks
+            
+            for i in range(len(boxes)):
+                box = boxes[i]
+                mask = masks[i]
                 
-            #frame = draw_segmentation(frame, results, model)
-            if mask_np is not None:
-                segment =  tools.segment_from_mask(mask_np, frame.shape)
-                cnt =segment["contour"]
-                if len(cnt) == 0:
-                    continue
-                s = SegmentedObject(  box=box,  contour=cnt,name=cls_name,  color=(0, 255, 0)   )
-                s.mask = mask_np
-                s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
-                s.smooth(epsilon=5.0)
-                self.detections.append(s)
+                cls_name = result.names[int(box.cls[0])],
+                if cls_name == "scissors":
+                    self.scissors = True
+                
+                if mask is not None:
+                    mask = mask.data[0].cpu().numpy()
+                    mask_np = (mask* 255).astype(np.uint8)
+                
+                #frame = draw_segmentation(frame, results, model)
+                if mask_np is not None:
+                    segment =  tools.segment_from_mask(mask_np, frame.shape)
+                    cnt =segment["contour"]
+                    if len(cnt) == 0:
+                        continue
+                    s = SegmentedObject(  box=box,  contour=cnt,name=cls_name,  color=(0, 255, 0)   )
+                    s.mask = mask_np
+                    s.track_id = 0
+                    s.smooth(epsilon=5.0)
+                    self.detections.append(s)
 
 
-        annotations = results.plot()
-
-        cv2.imshow("annotations", annotations)
-
-        frame_render = frame.copy()
-        
-        if self.scissors:
-            cv2.circle(frame_render,(1000,50), 20, (200,100,100), -1)
         #cv2.imshow("tracking", annotated)
         self.ribs =[]
-        tools.endProcess("Yolo")
+        tools.endProcess("Segmentation")
+
+        annotations = results[0].plot()
+        if platform.system() == "Windows":
+            cv2.imshow("annotations", annotations)
+        frame_render = frame.copy()
+        if self.scissors:
+            cv2.circle(frame_render,(1000,50), 20, (200,100,100), -1)
 
         best_pair, best_score = select_best_pair(self.detections, frame.shape)
         ## choose 
@@ -578,7 +666,7 @@ class SOP_Manager:
         return frame_render, None, None, self.detections
     
     ###########################################################################################
-    def run_frame10(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
+    def run_frame10(self, frame,frame_number,  review_mode, maximized = False):
         # ----------------------------------------------
         # ----------------------------------------------
         needle_visible = False
@@ -680,8 +768,8 @@ class SOP_Manager:
 
             tela_boxes = boxes[classes == 0]
             tela_bbox = tela_boxes[0] if len(tela_boxes) > 0 else None
-
-            self.valid_tracks = tracker_mgr.update(frame_number, boxes, contours, ids, classes, tela_bbox)
+            if self.tracker_mgr is not None:
+                self.valid_tracks = self.tracker_mgr.update(frame_number, boxes, contours, ids, classes, tela_bbox)
             
             for v in self.valid_tracks:
                 tid = v["track_id"]
@@ -741,7 +829,8 @@ class SOP_Manager:
                         self.active_event.px_to_cm =  self.px_to_cm
                         self.active_event.cm_to_px = self.active_event.cm_to_px
                         self.active_event.dist_px_mean= self.dist_px_mean
-                        cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
+                        if platform.system() == "Windows":
+                            cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
                     else:
                         # continuar evento
                         self.active_event.add_frame(frame_number)
@@ -783,7 +872,7 @@ class SOP_Manager:
         # Render cilindro usando la acción actual
         schema =  np.zeros((400, 400, 3), dtype=np.uint8)
         
-        if annotated is not None:
+        if annotated is not None and platform.system() == "Windows":
             cv2.imshow("tracking", annotated)
 
         ###
@@ -800,6 +889,33 @@ class SOP_Manager:
       
         self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
         tools.endProcess("rendering")
+
+        # ----------------------------------------------
+        # Controles
+        # ----------------------------------------------
+        if platform.system() == "Windows":
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                RUNNING_APP = False
+                
+            elif key == ord('t'):  # +30 frames
+                tools.printAverageTimes()
+            
+            elif key == ord('p'):  # +30 frames
+                paused = not paused
+            elif key == ord('f'):  # +30 frames
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number + 30)
+            elif key == ord('a'):
+                yaw -= 0.05
+            elif key == ord('d'):
+                yaw += 0.05
+            elif key == ord('w'):
+                tilt += 0.05
+            elif key == ord('s'):
+                tilt -= 0.05
+            elif key == ord('v'):
+                for tv in self.valid_tracks:
+                    print(tv)
  
         return frame_render, map_2d, schema, self.detections 
         

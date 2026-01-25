@@ -15,7 +15,6 @@ from frame_renderer.window_manager import WindowManager
 from frame_renderer.drawer import Drawer
 from frame_renderer.fonts import Font
 from inference_core import SOP_Manager,  get_data_for_unity_sop10
-from classes import TrackerManager
 import tools as tools
 import helpers as helpers
 import time
@@ -301,7 +300,6 @@ def run_glfw_loop( monitor_id=0):
                             det.draw(summary_frame, (220, 55, 55),width = 2)
             
             if sop_Manager is not None and sop_Manager.cloth_contours is not None:
-            
                 helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(0,255,255),offset=0, curvature = -0.002)
                 helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(255,0,),offset=100, curvature = -0.002)
 
@@ -378,12 +376,7 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
     sop_Manager = SOP_Manager(model_path = MODEL_PATH)
     action_mgr = sop_Manager.action_mgr
 
-    tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
-    # Acción inicial
-    current_action = action_mgr.set_action("sop10_1")
-    yaw = current_action.yaw
-    tilt=current_action.tilt
-    framework_yaw = 0.0
+    
     #########################
     SOP = {"name": 0, "index":0, "step_order":0}
  
@@ -414,7 +407,7 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
         print(f"Video file not found: {video_path}")
         return
 
-    prev_time = time.perf_counter()
+
 
     while cap.isOpened() and RUNNING_APP:
 
@@ -436,7 +429,6 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
 
         frame = cv2.resize(frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
         
-
         if frame_idx % step_frame != 0:
             continue
 
@@ -446,128 +438,11 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
             frame = translate_and_zoom(frame, zoom=ZOOM, dx=TX, dy=TY)
 
         ### estimate SOP
-        tools.startProcess("inference")
         SOP = sop_Manager.estimate_SOP(frame, frame_idx, None, sop_index = sop_index)
 
-        ### run detections
-        if SOP["name"] == "SOP30":
-            frame_render, _, _, detections = sop_Manager.run_frame30(frame,frame_idx,tracker_mgr, review_mode)
-            framework_yaw = sop_Manager.estimate_orientation_sop30(frame, detections, frame_idx)
-        else:
-            frame_render, _, _, detections = sop_Manager.run_frame10(frame,frame_idx,tracker_mgr, review_mode)
-       
-            framework_yaw = sop_Manager.estimate_orientation_sop10(frame, detections, frame_idx)
-        tools.endProcess("inference")
-
-        tools.startProcess("orientation")
-            
+        frame_render = sop_Manager.run_frame( SOP,frame,frame_idx,  review_mode, maximized = MAXIMIZED)
         
-        SOP["orientation"] = framework_yaw
-        # # ----------------------------------------------
-        # # Ajuste de tamaños
-        # # ----------------------------------------------
-        # right_w = schema.shape[1]
-
-        # map_resized = cv2.resize(map_2d, (right_w, fh // 2))
-        # cyl_resized = cv2.resize(schema, (right_w, fh // 2))
-
-        # right_stack = np.vstack([map_resized, cyl_resized])
-
-        # frame_resized = cv2.resize(frame_render, (fw, fh))
-
-        # ----------------------------------------------
-        # Composición final
-        # ----------------------------------------------
-        #combined = np.hstack([frame_resized, right_stack])
-        combined =  cv2.resize(frame_render, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
         
-        if len(sop_Manager.ribs) > 10:
-            tools.render_ribs(combined,sop_Manager.ribs )
-
-        ### SOP 10 Helpers
-        if SOP["name"] == "SOP10":   
-            if sop_Manager.cloth_contours is not None:
-                helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours, curvature = -0.002)
-            helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
-
-            #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
-            #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
-
-            #if ellipse is not None:
-            #    if helpers.ellipse_inside_contour(ellipse, sop_Manager.cloth_contours):
-            #        helpers.draw_dashed_ellipse(  combined,  ellipse,   color=(255, 255, 0),
-            #                thickness=2,   dash_length=12,    gap_length=8)
-        tools.endProcess("orientation")
-        
-        # ---- timing ----
-        curr_time = time.perf_counter()
-        dt = curr_time - prev_time
-        prev_time = curr_time
-
-        fps = 1.0 / dt if dt > 0 else 0.0
-
-        # ---- texto ----
-        text_fps = f"FPS: {fps:.2f}"
-        text_dt = f"Infer time: {dt*1000:.1f} ms"
-        text_dt = f"Infer time: {dt*1000:.1f} ms"
-
-        cv2.putText(            combined, text_fps,            (10, 30),            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,            (0, 255, 0),            2,            cv2.LINE_AA        )
-
-        cv2.putText(            combined, text_dt,            (10, 60),            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
-        cv2.putText(            combined, f"frame :{frame_idx}",            (10, 80),            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,            (0, 255, 255),            2,            cv2.LINE_AA        )
-
-        if not MAXIMIZED:
-            cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
-
-        if (len (sop_Manager.stitches_events) > 0):
-            strip = helpers.render_event_strip(sop_Manager.stitches_events, scale = 0.2)
-            if strip is not None:
-                cv2.imshow("Eventos", strip)
-        # ----------------------------------------------
-        # Controles
-        # ----------------------------------------------
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:
-            RUNNING_APP = False
-            break
-        elif key == ord('t'):  # +30 frames
-            tools.printAverageTimes()
-        
-        elif key == ord('p'):  # +30 frames
-            paused = not paused
-        elif key == ord('f'):  # +30 frames
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx + 30)
-        elif key == ord('a'):
-            yaw -= 0.05
-        elif key == ord('d'):
-            yaw += 0.05
-        elif key == ord('w'):
-            tilt += 0.05
-        elif key == ord('s'):
-            tilt -= 0.05
-        elif key == ord('v'):
-            for tv in sop_Manager.valid_tracks:
-                print(tv)
-
-        if key == ord('1'):
-            current_action = action_mgr.set_action("sop30_1")
-            yaw, tilt = current_action.yaw, current_action.tilt
-            sop_Manager.renderer.last_img = None
-
-        elif key == ord('2'):
-            current_action = action_mgr.set_action("sop30_2")
-            yaw, tilt = current_action.yaw, current_action.tilt
-            sop_Manager.renderer.last_img = None
-
-        elif key == ord('3'):
-            current_action = action_mgr.set_action("sop10_1")
-            yaw, tilt = current_action.yaw, current_action.tilt
-            sop_Manager.renderer.last_img = None
-
-
         ######## 
         ## export data to Kafka
         Data = {}
@@ -576,7 +451,7 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
             
             #### 
             Data["id"] = frame_idx                    
-            sFrame = tools.serializeFrame(None, frame, resizeFactor=0.1)                      
+            sFrame = tools.serializeFrame(None, frame_render, resizeFactor=0.1)                      
             Data["frame"] = sFrame
             Data["sop"] = SOP["name"] ## SOP 10 
             Data["step_number"] = SOP["index"]
@@ -625,7 +500,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="5102", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 30_A.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 10_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
 
@@ -634,7 +509,7 @@ def parse_args():
     parser.add_argument("--start_frame", default=25100, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
-    parser.add_argument("--SOP", default=30, help="workstation id")
+    parser.add_argument("--SOP", default=10, help="workstation id")
     
     # Parse the arguments
     args = parser.parse_args()
