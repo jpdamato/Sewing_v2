@@ -1,0 +1,13 @@
+
+### RUN DOCKER USING src-alcon4
+docker run -it --rm   --gpus all --runtime=nvidia -p 8081:8081  -v /home/dalehitt/Desktop/Sewing_v2:/app/src   -v /home/dalehitt/Desktop/:/app/data   src-alcon:4 bash
+
+### INSTALL MISSING DEPENDENCIES
+pip install torchvision==0.19
+pip install -U torch torchvision
+pip install glfw
+pip install moderngl
+
+## RUN THE APPLICATION FIRST WITH SOP 10
+python3  main_process.py --src ../data/Operation10_A.mp4 
+
