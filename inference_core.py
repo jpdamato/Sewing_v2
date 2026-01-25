@@ -486,7 +486,7 @@ class SOP_Manager:
         self.tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
         # Acción inicial
         self.current_action = self.action_mgr.set_action("sop10_1")
-
+        self.rendered_frame = None
     
    
     def estimate_SOP(self, frame, frame_number, detections,  sop_index):
@@ -593,7 +593,9 @@ class SOP_Manager:
         
         if  platform.system() == "Windows":
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
-
+        
+        self.rendered_frame = combined.copy()
+        
         if (len (self.stitches_events) > 0):
             strip = helpers.render_event_strip(self.stitches_events, scale = 0.2)
             if strip is not None and platform.system() == "Windows":

@@ -58,6 +58,7 @@ kafka_data = {}
 kafka_instance = None
 sop_Manager = None
 
+
 ########################################################
 ###  Class for handling real time streaming usin REST methods
 ########################################################
@@ -118,6 +119,41 @@ def main_start():
     )
     RUNNING_APP = True
     return response
+
+def generate_frames():
+    global sop_Manager
+
+    while True:
+        try:
+            ################################
+            frame = sop_Manager.rendered_frame
+            if frame is None:
+                print (f"Waiting to have a frame at ")
+                milliseconds_to_sleep = 1000
+                time.sleep(milliseconds_to_sleep / 1000)
+                continue
+            resized = cv2.resize(frame, (RESIZE_CAM_WIDTH, RESIZE_CAM_HEIGHT))
+            
+            current_datetime = datetime.now()
+            format_string = "%Y-%m-%d %H:%M:%S"
+            time_string = current_datetime.strftime(format_string)
+            cv2.putText(resized, time_string, (int(20), int(50)), 1,1, (255, 255, 255))
+
+            #frame = process_frame(frame, idx)
+            ret, buffer = cv2.imencode('.jpg', resized)
+            frame_bytes = buffer.tobytes()
+            milliseconds_to_sleep = 50
+            time.sleep(milliseconds_to_sleep / 1000)
+            yield (b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        except Exception as e:
+            print (f" Error as reading frame. Exception {e}")
+
+
+@app.route("/video_feed")
+def video_feed():
+   return Response(generate_frames(),
+                        mimetype="multipart/x-mixed-replace; boundary=frame")
 
 #########################################################
 ### Kafka Server
@@ -499,13 +535,13 @@ def parse_args():
     # Create ArgumentParser object
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
-    parser.add_argument("--port", default="5102", help="Port for exposing")
+    parser.add_argument("--port", default="8081", help="Port for exposing")
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 10_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
 
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
-    parser.add_argument("--overlay", default=False, help="Monitor ID")
+    parser.add_argument("--overlay", default=True, help="Monitor ID")
     parser.add_argument("--start_frame", default=25100, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
