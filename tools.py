@@ -8,6 +8,42 @@ from collections import defaultdict
 _process_start = {}
 _process_times = defaultdict(list)
 
+
+
+def draw_center_line(img,  center, direction, length, color = (0,0,255) ):
+    
+    cX, cY = int(center[0]), int(center[1])
+    vx, vy = direction
+
+    # Draw line
+    pt1 = (int(cX - vx * length/2), int(cY - vy * length/2))
+    pt2 = (int(cX + vx * length/2), int(cY + vy * length/2))
+    cv2.line(img, pt1, pt2, color, 2)
+   # cv2.circle(img, (cX, cY), 4, (255, 0, 0), -1)
+
+    return img
+
+
+def contour_center_line(contour):
+    """
+    Compute the center line (main axis) of a contour using PCA.
+
+    Returns:
+        center: (x, y)
+        direction: (vx, vy) - unit vector
+    """
+    data_pts = contour.reshape(-1, 2).astype(np.float32)
+
+    # Perform PCA
+    mean, eigenvectors, eigenvalues = cv2.PCACompute2(data_pts, mean=np.array([]))
+
+    # Extract center and main direction
+    center = tuple(mean[0])
+    direction = tuple(eigenvectors[0])  # main axis direction
+
+    return center, direction
+
+
 # ----------------------
 def startProcess(process_id: str):
     """
@@ -294,8 +330,32 @@ def clip_curve_to_contour(curve_pts, contour):
         return None
 
     return np.array(inside, dtype=np.int32)
+##################################################
+def is_contour_almost_circular(contour,
+                               min_area=50,
+                               circularity_thresh=0.75):
+    """
+    Retorna (is_circular, circularity)
 
+    contour: (N,1,2)
+    """
+
+    area = cv2.contourArea(contour)
+    if area < min_area:
+        return False, 0.0
+
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter == 0:
+        return False, 0.0
+
+    circularity = 4 * np.pi * area / (perimeter * perimeter)
+
+    return circularity >= circularity_thresh, circularity
+###################################################
 def contour_axes(contour):
+    if contour is None:
+        return
+    
     pts = contour.reshape(-1, 2).astype(np.float32)
     center = pts.mean(axis=0)
 
@@ -365,7 +425,7 @@ def merge_segments(needles):
     p2 = (int(x0 + vx * t_max), int(y0 + vy * t_max))
 
     return p1, p2
-def process_needle(needle_s, img):
+def process_needle(needle_s, img, render = False):
     needle_segments = []
     split_needle = []
 
@@ -399,7 +459,12 @@ def process_needle(needle_s, img):
             if len(group) >= 2:
                 p1, p2 = merge_segments(group)
                 split_needle.append([p1,p2, group])
-                cv2.line(img, p1, p2, (0,255,0), 3)
+                if render :
+                    cv2.line(img, p1, p2, (0,255,0), 1)
+
+                    for s in group:
+                        p1,p2 = s.get_center_line()
+                        cv2.line(img, p1, p2, (0,200,110), 2)
     except  :
         print ("Error at computing segments")
 

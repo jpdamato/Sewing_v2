@@ -16,6 +16,8 @@ from frame_renderer.fonts import Font
 import tools as tools
 import helpers as helpers
 import time
+from classes import StitchEvent, StitchingAction, SegmentedObject, CylinderRenderer, ActionManager
+
 # ==================================================
 # Configuración
 # ==================================================
@@ -26,6 +28,98 @@ RESIZE_CAM_HEIGHT = 720
 CLASE_HILO = 6
 CLASE_TELA = 0
 
+#######
+###RULES
+## SOP 10 : 16. if a needle is detected in parts, it is doing an stitch, and we save it
+##          we save these stitches and compute measurement
+#           17. after 7/8 and if we detect a thread, we have a 360 around            
+### SOP 30 :
+###  Each time we detect scissor for several frames, we are preparing cloth
+### after scissor dissapear and needle is detected, we start are running tasks 8,9,10
+###  Task 8 if cloth is centered and circle
+### Task 9 if cloth is lateral 
+
+ACTIONS = {
+    "sop30_1": StitchingAction(
+        name="sop30_1",
+        texture_path="SOP30-Lateral_B.png",
+        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID30.mp4",
+        yaw=0.0,
+        tilt=-np.pi/2 ,
+    ),
+    "sop30_2": StitchingAction(
+        name="sop30_2",
+        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID30.mp4",
+        texture_path="SOP30-Lateral_B.png",
+        yaw=np.pi / 2,   # distinta orientación
+        tilt=0.0
+    ),
+    "sop10_1": StitchingAction(
+        name="sop10_1",
+        texture_path="SOP10_1.png",
+        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID10.mp4",
+        yaw=0.0,
+        tilt=-0.3
+    )
+}
+
+def bbox_center(bbox):
+    x1, y1, x2, y2 = bbox
+    return np.array([(x1 + x2) / 2, (y1 + y2) / 2])
+
+
+def select_best_pair(detections, frame_shape,
+                     w_dist=1.0, w_center=0.5,
+                     max_pair_dist=None):
+    """
+    Elige el par de objetos de distinta clase:
+    - más cercanos entre sí
+    - mejor centrados en el frame
+
+    frame_shape: (H, W)
+    """
+
+    H, W = frame_shape[:2]
+    frame_center = np.array([W / 2, H / 2])
+
+    best_score = np.inf
+    best_pair = None
+
+    for i in range(len(detections)):
+        for j in range(i + 1, len(detections)):
+
+            d1, d2 = detections[i], detections[j]
+
+            # --- clases distintas
+            if (d1.name ==  d2.name) :
+                continue
+            
+            if not ((d1.name == "cloth" or d2.name== "cloth") and (d1.name == "framework" or d2.name  == "framework") ) :
+                continue
+            
+            c1 = bbox_center(d1.box)
+            c2 = bbox_center(d2.box)
+
+            # --- distancia entre objetos
+            dist_pair = np.linalg.norm(c1 - c2)
+
+            if max_pair_dist is not None and dist_pair > max_pair_dist:
+                continue
+
+            # --- centrado respecto al frame (promedio)
+            dist_center = (
+                np.linalg.norm(c1 - frame_center) +
+                np.linalg.norm(c2 - frame_center)
+            ) / 2
+
+            # --- score combinado
+            score = w_dist * dist_pair + w_center * dist_center
+
+            if score < best_score:
+                best_score = score
+                best_pair = (d1, d2)
+
+    return best_pair, best_score
 
 def render_cylinder(texture, out_size=(400, 400),
                          yaw=0.0, tilt=0.0,
@@ -54,39 +148,6 @@ def render_cylinder(texture, out_size=(400, 400),
 
     return render
 
-
-def contour_center_line(contour):
-    """
-    Compute the center line (main axis) of a contour using PCA.
-
-    Returns:
-        center: (x, y)
-        direction: (vx, vy) - unit vector
-    """
-    data_pts = contour.reshape(-1, 2).astype(np.float32)
-
-    # Perform PCA
-    mean, eigenvectors, eigenvalues = cv2.PCACompute2(data_pts, mean=np.array([]))
-
-    # Extract center and main direction
-    center = tuple(mean[0])
-    direction = tuple(eigenvectors[0])  # main axis direction
-
-    return center, direction
-
-
-def draw_center_line(img,  center, direction, length, color = (0,0,255) ):
-    
-    cX, cY = int(center[0]), int(center[1])
-    vx, vy = direction
-
-    # Draw line
-    pt1 = (int(cX - vx * length/2), int(cY - vy * length/2))
-    pt2 = (int(cX + vx * length/2), int(cY + vy * length/2))
-    cv2.line(img, pt1, pt2, color, 2)
-   # cv2.circle(img, (cX, cY), 4, (255, 0, 0), -1)
-
-    return img
 
 #######################################################
 def intersect_line_segment(p, d, a, b, eps=1e-6):
@@ -173,263 +234,6 @@ def estimate_pixel_to_cm(points,
 
     return px_to_cm, cm_to_px, dist_px_mean
 
-@dataclass
-class StitchingAction:
-    name: str
-    video_path: str
-    texture_path: str
-    yaw: float
-    tilt: float
-
-ACTIONS = {
-    "sop30_1": StitchingAction(
-        name="sop30_1",
-        texture_path="SOP30-Lateral_B.png",
-        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID30.mp4",
-        yaw=0.0,
-        tilt=-np.pi/2 ,
-    ),
-    "sop30_2": StitchingAction(
-        name="sop30_2",
-        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID30.mp4",
-        texture_path="SOP30-Lateral_B.png",
-        yaw=np.pi / 2,   # distinta orientación
-        tilt=0.0
-    ),
-    "sop10_1": StitchingAction(
-        name="sop10_1",
-        texture_path="SOP10_1.png",
-        video_path = "E:/Resources/Novathena/INSIPIRIS/INSPIRIS Stent ID10.mp4",
-        yaw=0.0,
-        tilt=-0.3
-    )
-}
-#################################################################
-class TrackerManager:
-
-    def __init__(self, hilo_class_id, min_samples=20):
-        self.hilo_class_id = hilo_class_id
-        self.min_samples = min_samples
-        self.history = {}
-
-    def update(self,frame_id, boxes,contours, ids, classes, tela_bbox=None):
-
-        for box, tid, cls in zip(boxes, ids, classes):
-
-            if cls != self.hilo_class_id:
-                continue
-
-            if tid not in self.history:
-                self.history[tid] = []
-
-            self.history[tid].append(box)
-
-        # ---- filtrar tracks válidos
-        valid_tracks = []
-
-        for tid, boxes in self.history.items():
-
-            if len(boxes) < self.min_samples:
-                continue
-
-            if tela_bbox is not None:
-                if not self._inside_tela(boxes, tela_bbox):
-                    continue
-            cn = boxes[-1][0:2] + (boxes[-1][2:4] - boxes[-1][0:2]) / 2
-
-            valid_tracks.append({
-                "track_id": tid, "history_lengh" : len(boxes),
-                "boxes": boxes, "frame" : frame_id,
-                  "last_box": boxes[-1],
-                  "center" : cn,
-                  "length": 100,
-                   "distance_to_origin": 50
-            })
-
-        return valid_tracks
-
-    @staticmethod
-    def _inside_tela(boxes, tela_bbox):
-        x1t, y1t, x2t, y2t = tela_bbox
-        for b in boxes:
-            x1,y1,x2,y2 = b
-            if not (x1>=x1t and y1>=y1t and x2<=x2t and y2<=y2t):
-                return False
-        return True
-        """
-        Verifica que TODAS las boxes estén dentro de la tela
-        """
-        x1_t, y1_t, x2_t, y2_t = tela_bbox
-
-        for b in boxes:
-            x1, y1, x2, y2 = b
-            if not (
-                x1 >= x1_t and y1 >= y1_t and
-                x2 <= x2_t and y2 <= y2_t
-            ):
-                return False
-
-        return True
-    # --------------------------------------------------
-class ActionManager:
-    def __init__(self, actions):
-        self.actions = actions
-        self.current = None
-        self.texture = None
-
-    def set_action(self, name):
-        action = self.actions[name]
-
-        # Cargar textura solo si cambia
-        if self.current is None or action.texture_path != self.current.texture_path:
-            self.texture = cv2.imread(action.texture_path)
-
-        self.current = action
-        return action
-
-class CylinderRenderer:
-    def __init__(self, eps=1e-4):
-        self.last_yaw = None
-        self.last_tilt = None
-        self.last_img = None
-        self.eps = eps
-
-    def render(self, texture, out_size, yaw, tilt):
-        if (
-            self.last_img is not None and
-            abs(yaw - self.last_yaw) < self.eps and
-            abs(tilt - self.last_tilt) < self.eps
-        ):
-            return self.last_img
-
-        img = render_cylinder(
-            texture=texture,
-            out_size=out_size,
-            yaw=yaw,
-            tilt=tilt
-        )
-
-        self.last_yaw = yaw
-        self.last_tilt = tilt
-        self.last_img = img
-        return img
-
-#############################
-## class representing objects segmented (cloth, threads, gloves, ). Could have several contours
-class SegmentedObject:
-    def __init__(self,box, contour, name, color):
-        self.contour = contour
-        self.name = name
-        self.color = color
-        self.rect = None
-        self.intersections = []
-        self.valid = True
-        self.track_id = -1
-
-        all_points = np.vstack([contour])
-        if len(contour) > 0:
-            self.rect = cv2.minAreaRect(all_points)  # ((cx, cy), (w, h), angle)
-        
-        self.box = box
-        self.center, self.direction = contour_center_line(contour)
-
-    def get_center_line(self, frame):
-        _, (w, h), angle = self.rect
-        length = max(w, h)
-        
-        cX, cY = int(self.center[0]), int(self.center[1])
-        vx, vy = self.direction
-
-    # Draw line
-        pt1 = (int(cX - vx * length/2), int(cY - vy * length/2))
-        pt2 = (int(cX + vx * length/2), int(cY + vy * length/2))
-    
-        return pt1, pt2
-
-    def smooth(self, epsilon = 5.0):
-           # higher → fewer points
-        self.contour = cv2.approxPolyDP(self.contour, epsilon, True)
-
-    def compute_intersection_contour(self, contour):
-        if contour is None:
-            self.intersections = []
-        else:
-            vx, vy = self.direction
-            perp_dir = (-vy, vx)
-
-            self.intersections = intersect_line_contour(self.center, perp_dir, contour)
-        return self.intersections
-
-    def angle(self):
-        dx, dy = self.direction
-        angle = math.degrees(math.atan2(dy, dx))
-
-        return angle
-
-    
-    def draw_contours(self, frame, color=(0, 255, 0), width=2):
-        cv2.drawContours(frame, [self.contour], 0, color, width)
-
-    def compute_features(self):
-        pass
-
-    def draw(self, frame, color=(0, 0, 255), width=2):
-        self.get_center_line(frame)
-
-        draw_center_line(frame, self.center, self.direction, max(self.rect[1]), color)
-
-        for pt in self.intersections:
-            cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
-    
-         # Draw rectangle on original image
-        #cv2.drawContours(frame, [self.contour], 0, color, width)
-
-     
-###########################################
-class Stitch(SegmentedObject):
-    def __init__(self, contour, id):
-        self.contour = contour
-        self.id = id
-        self.name = "stitch"
-        all_points = np.vstack([contour])
-        self.rect = cv2.minAreaRect(all_points)  # ((cx, cy), (w, h), angle)
-        self.box = cv2.boxPoints(self.rect)
-        self.center, self.direction = contour_center_line(contour)
-        self.color = (255, 0, 255)
-        self.aux_contours = []
-        self.distances = [] # distance to centerline. Close to 0 is long
-        self.std = 0
-        self.avg = 0
-        self.normalized_length = 0
-        self.distance_to_prev_stitch = 0
-        self.skeleton_points = []
-       
-       
-    def angle(self):
-        dx, dy = self.direction
-        angle = math.degrees(math.atan2(dy, dx))
-
-        return angle
-    
-    def compute_features(self):
-        pass
-
-class StitchEvent:
-    def __init__(self, event_id, start_frame, frame, segment):
-        self.event_id = event_id
-        self.start_frame = start_frame
-        self.frames = [start_frame]
-        self.start_time = time.perf_counter()
-        self.last_time = self.start_time
-        self.frame = frame
-        self.segment =segment
-
-    def add_frame(self, frame_number):
-        self.frames.append(frame_number)
-        self.last_time = time.perf_counter()
-
-    def is_expired(self, timeout_sec):
-        return (time.perf_counter() - self.last_time) > timeout_sec
 #
 def draw_segmentation(frame, result, model, alpha=0.4):
     overlay = frame.copy()
@@ -473,14 +277,16 @@ def get_data_for_unity_sop10(sop_Manager,frame):
     dthreas = []
     point_ids = []
     idx = 0
-    for thread in sop_Manager.selected_stitches.values():
+    for stitch_event in sop_Manager.stitches_events:
+        thread =stitch_event.hide_stitch
+
         dthreas.append({"id": idx,
                     "center": [float(thread.center[0]), float(thread.center[1])],
-                    "length": float(max(thread.rect[1])),
+                    "length": float(thread.length),
                     "has_devitation" : False,
-                    "deviationDistance": 0.0122350436,
-                    "deviationLength": 0.149589762,
-                    "deviationAngle": 2.6627202 }   )
+                    "deviationDistance": 0.0122350436, # distance to next thread
+                    "deviationLength": 0.149589762, # distance of expectation
+                    "deviationAngle": 2.6627202 }   ) # deviation angle
         point_ids.append(idx)
         idx += 1
 
@@ -675,31 +481,36 @@ class SOP_Manager:
         self.active_event =None
         self.timeout_sec = 5.0
         
-        self.selected_stitches = {}
+        self.tracked_stitches = {}
     
    
-    def estimate_SOP(self, frame, frame_number, detections):
+    def estimate_SOP(self, frame, frame_number, detections,  sop_index):
         best_conf = 0
         ### Hardcoded SOP 10
-        self.sop_index = 10
-        self.step_order = 16
-
+        self.sop_index = sop_index
         results = self.detections
 
-        self.tracking -= 1
-        ##use previous detections
-        for det in self.detections:
-            if det.name == "needle" or det.name == "scissors":
-                self.tracking += 1
-                break
-        #############################
-        if self.tracking <= 0 : 
-            self.step_order = 17
-        else:
+        if self.sop_index == 10:
             self.step_order = 16
 
-        return {"name": f"SOP{self.sop_index}", "index": 0, "end": frame_number ,"step_order" :self.step_order,"orientation" : 0,"rank":best_conf, "index" : self.sop_index}
-    
+        
+            self.tracking -= 1
+            ##use previous detections
+            for det in self.detections:
+                if det.name == "needle" or det.name == "scissors":
+                    self.tracking += 1
+                    break
+            #############################
+            if self.tracking <= 0 : 
+                self.step_order = 17
+            else:
+                self.step_order = 16
+        else:
+            self.step_order =  8
+        
+        self.SOP = {"name": f"SOP{self.sop_index}", "index": 0, "end": frame_number ,"step_order" :self.step_order,"orientation" : 0,"rank":best_conf, "index" : self.sop_index}
+     
+        return self.SOP 
     ################################################
     def estimate_orientation_sop30(self,frame, detections, index):
         
@@ -710,7 +521,64 @@ class SOP_Manager:
 
         return index / 1000
     
-    def run_frame(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
+    def run_frame30(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
+        tools.startProcess("Yolo")
+      #  
+        results = self.model.predict(frame, conf=conf, verbose=False)
+
+                    # bbox de la tela
+        self.detections = []
+        self.scissors = False
+        #### compute other contours        
+        for i, cls_id in enumerate(results.boxes.cls):
+            cls_name = self.model.names[int(cls_id)]
+
+            if cls_name == "scissors":
+                self.scissors = True
+                
+
+            mask_np = None
+            box = results.boxes.xyxy[i].cpu().numpy()
+            if results.masks is not None:
+                mask = results.masks.data[i]
+                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
+                
+            #frame = draw_segmentation(frame, results, model)
+            if mask_np is not None:
+                segment =  tools.segment_from_mask(mask_np, frame.shape)
+                cnt =segment["contour"]
+                if len(cnt) == 0:
+                    continue
+                s = SegmentedObject(  box=box,  contour=cnt,name=cls_name,  color=(0, 255, 0)   )
+                s.mask = mask_np
+                s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
+                s.smooth(epsilon=5.0)
+                self.detections.append(s)
+
+
+        annotations = results.plot()
+
+        cv2.imshow("annotations", annotations)
+
+        frame_render = frame.copy()
+        
+        if self.scissors:
+            cv2.circle(frame_render,(1000,50), 20, (200,100,100), -1)
+        #cv2.imshow("tracking", annotated)
+        self.ribs =[]
+        tools.endProcess("Yolo")
+
+        best_pair, best_score = select_best_pair(self.detections, frame.shape)
+        ## choose 
+        if best_pair is not None:
+            d1, d2 = best_pair
+            d1.draw_contours(frame_render)
+            d2.draw_contours(frame_render)
+
+        return frame_render, None, None, self.detections
+    
+    ###########################################################################################
+    def run_frame10(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
         # ----------------------------------------------
         # ----------------------------------------------
         needle_visible = False
@@ -738,11 +606,16 @@ class SOP_Manager:
         cloth_contour = None
         self.detections = []
         self.cloth_visible = False
+        
         #### compute cloth 
         tools.startProcess("merge_cloth_masks")
         mask_cloth = tools.merge_cloth_masks(results, cloth_class_id=0, frame_shape=frame.shape)
         cloth_contour, cloth_box = tools.extract_cloth_contour_and_bbox(mask_cloth)
-
+        tools.endProcess("merge_cloth_masks")
+        
+        
+        tools.startProcess("convert_to_objects")
+        
         if cloth_contour is not None:
             cloth = SegmentedObject(  box=cloth_box,  contour=cloth_contour,name="cloth",  color=(0, 255, 0)   )
             cloth.mask = mask_cloth
@@ -769,11 +642,6 @@ class SOP_Manager:
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
-            if cls_name == "clothX":
-                mask = results.masks.data[i]
-                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
-                mask_cloth = cv2.resize(mask_np, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-                
                 #frame = draw_segmentation(frame, results, model)
             if mask_np is not None:
                 segment =  tools.segment_from_mask(mask_np, frame.shape)
@@ -798,7 +666,7 @@ class SOP_Manager:
                         s.valid = False
                 self.detections.append(s)  
         
-        tools.endProcess("merge_cloth_masks")
+        tools.endProcess("convert_to_objects")
         
         ### calculate tracking
         tools.startProcess("tracking")
@@ -818,14 +686,14 @@ class SOP_Manager:
             for v in self.valid_tracks:
                 tid = v["track_id"]
 
-                if tid in self.selected_stitches:
+                if tid in self.tracked_stitches:
                     continue
                 selected = [n for n in self.detections if n.track_id == tid]
                 if len(selected) == 0:
                     continue
-                self.selected_stitches[tid] = selected[0]
-                self.selected_stitches[tid].track_id = tid
-                self.selected_stitches[tid].compute_features()
+                self.tracked_stitches[tid] = selected[0]
+                self.tracked_stitches[tid].track_id = tid
+                self.tracked_stitches[tid].compute_features()
 
         tools.endProcess("tracking")
         
@@ -853,48 +721,55 @@ class SOP_Manager:
                 print(f"Exception computing grid: {e}")
         
         tools.endProcess("compute_ribs")
-        
-        tools.startProcess("post_process1")
         map_2d =  self.action_mgr.texture
+        ################ SOP 10
+        if self.SOP["name"] == "SOP10":
+            tools.startProcess("post_process1")
+         
 
-        yaw = self.action_mgr.current.yaw
-        tilt = self.action_mgr.current.tilt
-        
-        ### stitch event
-        if len(needle_masks)>1:
-            possible_stitches = tools.process_needle(needle_masks, frame_render)
+            
+            ### stitch event
+            if len(needle_masks)>1:
+                possible_stitches = tools.process_needle(needle_masks, frame_render)
 
-            if len(possible_stitches)>0:
-                if self.active_event is None:
-                    # crear nuevo evento
-                    self.active_event = StitchEvent(len(self.stitches_events), frame_number,frame,possible_stitches)
-                    cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
-                else:
-                    # continuar evento
-                    self.active_event.add_frame(frame_number)
+                if len(possible_stitches)>0:
+                    if self.active_event is None:
+                        # crear nuevo evento
+                        self.active_event = StitchEvent(len(self.stitches_events), frame_number,frame,possible_stitches[0])
+                        self.active_event.get_hide_stitch(frame_render)
+                        ## save current measurements
+                        self.active_event.px_to_cm =  self.px_to_cm
+                        self.active_event.cm_to_px = self.active_event.cm_to_px
+                        self.active_event.dist_px_mean= self.dist_px_mean
+                        cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
+                    else:
+                        # continuar evento
+                        self.active_event.add_frame(frame_number)
 
-        # ---- chequear expiración ----
-        if self.active_event is not None:
-            if self.active_event.is_expired(self.timeout_sec):
-               # self.closed_events.append(self.active_event)
-                self.stitches_events.append(self.active_event)
-                self.active_event = None
-        tools.endProcess("post_process1")
+            # ---- chequear expiración ----
+            if self.active_event is not None:
+                if self.active_event.is_expired(self.timeout_sec):
+                # self.closed_events.append(self.active_event)
+                    self.stitches_events.append(self.active_event)
+                    self.active_event = None
+            tools.endProcess("post_process1")
 
-        tools.startProcess("post_process2")
-        #################################################################
-        thread_contours = [n.contour for n in self.detections if n.name == "thread"]
-        self.cloth_contours = cloth_contour
-        
-        #################################################################3
-        if len(thread_contours) >= 3 and cloth_contour is not None:            
-            self.hilos_ok = tools.filtrar_hilos_validos(
-                 thread_contours, cloth_contour,
-                  inside_ratio_min=0.85, length_factor=2.5)
+            tools.startProcess("post_process2")
+            #################################################################
+            thread_contours = [n.contour for n in self.detections if n.name == "thread"]
+            self.cloth_contours = cloth_contour
+            
+            #################################################################3
+            if len(thread_contours) >= 3 and cloth_contour is not None:            
+                self.hilos_ok = tools.filtrar_hilos_validos(
+                    thread_contours, cloth_contour,
+                    inside_ratio_min=0.85, length_factor=2.5)
+            else:
+                self.hilos_ok = []
+            tools.endProcess("post_process2")
         else:
-            self.hilos_ok = []
-        tools.endProcess("post_process2")
-
+            self.cloth_contours = None
+            pass
         
         tools.startProcess("rendering")
 

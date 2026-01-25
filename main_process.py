@@ -14,7 +14,8 @@ import os
 from frame_renderer.window_manager import WindowManager
 from frame_renderer.drawer import Drawer
 from frame_renderer.fonts import Font
-from inference_core import SOP_Manager, TrackerManager , get_data_for_unity_sop10
+from inference_core import SOP_Manager,  get_data_for_unity_sop10
+from classes import TrackerManager
 import tools as tools
 import helpers as helpers
 import time
@@ -368,7 +369,7 @@ def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
 
     return out
 
-def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False, working_path="./data/"):
+def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
     global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager
     # ==================================================
@@ -446,18 +447,20 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
 
         ### estimate SOP
         tools.startProcess("inference")
-        SOP = sop_Manager.estimate_SOP(frame, frame_idx, None)
+        SOP = sop_Manager.estimate_SOP(frame, frame_idx, None, sop_index = sop_index)
 
         ### run detections
-        frame_render, map_2d, schema, detections = sop_Manager.run_frame(frame,frame_idx,tracker_mgr, review_mode)
+        if SOP["name"] == "SOP30":
+            frame_render, _, _, detections = sop_Manager.run_frame30(frame,frame_idx,tracker_mgr, review_mode)
+            framework_yaw = sop_Manager.estimate_orientation_sop30(frame, detections, frame_idx)
+        else:
+            frame_render, _, _, detections = sop_Manager.run_frame10(frame,frame_idx,tracker_mgr, review_mode)
+       
+            framework_yaw = sop_Manager.estimate_orientation_sop10(frame, detections, frame_idx)
         tools.endProcess("inference")
 
         tools.startProcess("orientation")
-        ### estimate orientation
-        if SOP["name"] == "SOP30":
-            framework_yaw = sop_Manager.estimate_orientation_sop30(frame, detections, frame_idx)
-        else:
-            framework_yaw = sop_Manager.estimate_orientation_sop10(frame, detections, frame_idx)
+            
         
         SOP["orientation"] = framework_yaw
         # # ----------------------------------------------
@@ -481,8 +484,10 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
         if len(sop_Manager.ribs) > 10:
             tools.render_ribs(combined,sop_Manager.ribs )
 
-            
-            helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours, curvature = -0.002)
+        ### SOP 10 Helpers
+        if SOP["name"] == "SOP10":   
+            if sop_Manager.cloth_contours is not None:
+                helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours, curvature = -0.002)
             helpers.render_perpendicular_curved_guideline(combined, sop_Manager.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
 
             #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
@@ -577,7 +582,10 @@ def main_loop(video_path, monitor_id = 0, start_frame=18000, has_rectangle=False
             Data["step_number"] = SOP["index"]
             Data["step_order"] = SOP["step_order"] ## 16 or 17
 
-            unity_points , unity_points_ids = get_data_for_unity_sop10(sop_Manager, frame)
+            if SOP["name"] == "SOP10":
+                unity_points , unity_points_ids = get_data_for_unity_sop10(sop_Manager, frame)
+            else:
+                unity_points , unity_points_ids = [],[]
             ## bug still hardcoded points
             Data["unity_points_coords"] =unity_points #json.dumps( [] if len(unity_points) == 0 else unity_points  )
             Data["unity_points_ids"] = unity_points_ids
@@ -617,7 +625,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="5102", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 10_A.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 30_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
 
@@ -626,14 +634,15 @@ def parse_args():
     parser.add_argument("--start_frame", default=25100, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
-   
+    parser.add_argument("--SOP", default=30, help="workstation id")
+    
     # Parse the arguments
     args = parser.parse_args()
 
     # Return the parsed arguments
     return args
 
-
+##################################################################
 def get_mp4_from_path(path: str) -> str | None:
     """
     If 'path' is an mp4 file, return it.
@@ -708,7 +717,7 @@ if __name__ == "__main__":
     
 
     if args.device != "":
-        main_loop(args.device, args.monitor_id, args.start_frame)
+        main_loop(args.device, monitor_id=args.monitor_id, start_frame=args.start_frame, sop_index=args.SOP)
     else:
         mp4File = get_mp4_from_path(args.src)
 
@@ -716,4 +725,4 @@ if __name__ == "__main__":
             print("Failed to open file")
             exit()
 
-        main_loop(mp4File, args.monitor_id, args.start_frame)
+        main_loop(mp4File,monitor_id= args.monitor_id,start_frame= args.start_frame, sop_index=args.SOP)
