@@ -474,10 +474,11 @@ def get_front_end_data(nFrame,  frame, SOP):
 class SOP_Manager:
     def __init__(self, model_path):
         self.current_sop = None
-        self.model = YOLO(model_path)
+        
         #self.yaw = 0.20
         #self.tilt = 0.20
         self.sop_index = 10
+        self.cloth_contours = None
         
         self.prev_cloth_frame = None
         self.detections = []
@@ -488,6 +489,7 @@ class SOP_Manager:
         ### handle stitches events
         self.stitches_events = []
         self.active_event =None
+        self.original_frame = None
         self.timeout_sec = 5.0
         self.status = False # user is working or idle
         self.tracked_stitches = {}
@@ -495,7 +497,7 @@ class SOP_Manager:
         # Acción inicial
         self.current_action = self.action_mgr.set_action("sop10_1")
         self.rendered_frame = None
-    
+        self.model = YOLO(model_path)
    
     def estimate_SOP(self, frame, frame_number, detections,  sop_index):
         best_conf = 0
@@ -684,11 +686,12 @@ class SOP_Manager:
 
         tools.startProcess("Yolo")
       #  
-        results = self.model.track(    frame,    persist=True, 
-                #device='cuda',
-                    conf=0.3,     classes=None,     # detecta todo
-                    tracker="bytetrack.yaml",
-                    verbose=False)[0]
+        results = self.model.predict(frame, conf=0.3, verbose=False)[0]
+        
+        #results = self.model.track(    frame,    persist=True, 
+        #            conf=0.3,     classes=None,     # detecta todo
+        #            tracker="bytetrack.yaml",
+        #            verbose=False)[0]
 
                     # bbox de la tela
         
@@ -826,21 +829,22 @@ class SOP_Manager:
             ### stitch event
             if len(needle_masks)>1:
                 possible_stitches = tools.process_needle(needle_masks, frame_render)
-
+                #############################################################################
                 if len(possible_stitches)>0:
                     if self.active_event is None:
                         # crear nuevo evento
                         self.active_event = StitchEvent(len(self.stitches_events), frame_number,frame,possible_stitches[0])
-                        self.active_event.get_hide_stitch(frame_render)
+                        self.active_event.get_hide_stitch()
                         ## save current measurements
                         self.active_event.px_to_cm =  self.px_to_cm
                         self.active_event.cm_to_px = self.active_event.cm_to_px
                         self.active_event.dist_px_mean= self.dist_px_mean
                         if platform.system() == "Windows":
+                            self.active_event.draw(frame_render)
                             cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
                     else:
                         # continuar evento
-                        self.active_event.add_frame(frame_number)
+                        self.active_event.add_frame(frame_number,possible_stitches[0])
 
             # ---- chequear expiración ----
             if self.active_event is not None:
@@ -869,6 +873,8 @@ class SOP_Manager:
         
         tools.startProcess("rendering")
 
+        if self.active_event is not None:
+            self.active_event.draw(frame)
         ### render helpers
         if self.cloth_visible:
             if self.step_order ==16:

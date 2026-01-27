@@ -252,21 +252,25 @@ class StitchEvent:
         self.px_to_cm = 0
         self.cm_to_px = 0
         self.dist_px_mean = 0
+        self.coords = []
+        p1,p2, group = self.segment
+        self.coords.append((p1,p2))
+        self.last_coords = (p1,p2)
     #########################################
     ## segment has estimated pos + Needle detection
-    def get_hide_stitch(self, frame):
+    def get_hide_stitch(self):
         p1,p2, group = self.segment
 
         for s in group:
             p1,p2 = s.get_center_line()
-            cv2.line(frame, p1, p2, (0,200,110), 1)
+           # cv2.line(frame, p1, p2, (0,200,110), 1)
 
         
         if len(group)>=2:
             p01,p02 = group[0].get_center_line()
             p11,p12 = group[1].get_center_line()
            
-            cv2.line(frame, p02, p11, (0,255,110), 2)
+           # cv2.line(frame, p02, p11, (0,255,110), 2)
             contour = np.array([p02,p11], dtype=np.int32).reshape((-1, 1, 2))
             self.hide_stitch = Stitch(contour , self.event_id)
 
@@ -275,9 +279,30 @@ class StitchEvent:
         
         return []
 
-    def add_frame(self, frame_number):
+    def add_frame(self, frame_number, segment):
+        p1,p2, group = self.segment
+        self.last_coords = (p1,p2)
+        self.segment=segment
+        self.coords.append(segment)
         self.frames.append(frame_number)
         self.last_time = time.perf_counter()
 
     def is_expired(self, timeout_sec):
         return (time.perf_counter() - self.last_time) > timeout_sec
+
+    def draw(self, frame):
+        p1,p2, group = self.segment
+
+        for s in group:
+            p1,p2 = s.get_center_line()
+            cv2.line(frame, p1, p2, (0,200,110), 1)
+        
+        if len(group)>=2:
+            p01,p02 = group[0].get_center_line()
+            p11,p12 = group[1].get_center_line()
+
+            cv2.circle(frame, p02,5,(100,100,200),5)
+            cv2.circle(frame, p11,5,(100,100,200),5)
+           
+            cv2.line(frame, p02, p11, (0,255,110), 2)
+        

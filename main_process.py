@@ -563,7 +563,7 @@ def parse_args():
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation10_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
-
+    parser.add_argument("--model", default="edwards_insipiris_best_14jan.pt", help="Model path")
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--overlay", default=True, help="Monitor ID")
     parser.add_argument("--start_frame", default=25100, help="Enable testing")
@@ -626,7 +626,7 @@ if __name__ == "__main__":
     args = parse_args()
     print(args)
     ### start API
-
+    MODEL_PATH = args.model
     MAXIMIZED = args.maximized
     WS_ID = args.ws_id
     RUN_OVERLAY = args.overlay
