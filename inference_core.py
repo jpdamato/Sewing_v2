@@ -271,7 +271,15 @@ def draw_segmentation(frame, result, model, alpha=0.4):
     # Mezcla alpha
     return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
-### current data is hardcoded for testing purposes
+
+### BUG JUAN : current data is not fully implemented
+#  for testing purposes
+def get_data_for_unity_sop30(sop_Manager,frame):
+    return [], []
+
+
+### BUG JUAN : current data is not fully implemented
+#  for testing purposes
 def get_data_for_unity_sop10(sop_Manager,frame):
     
     data = {}
@@ -286,7 +294,7 @@ def get_data_for_unity_sop10(sop_Manager,frame):
                     "length": float(thread.length),
                     "has_devitation" : False,
                     "deviationDistance": 0.0122350436, # distance to next thread
-                    "deviationLength": 0.149589762, # distance of expectation
+                    "deviationLength": 0.149589762, # expected length
                     "deviationAngle": 2.6627202 }   ) # deviation angle
         point_ids.append(idx)
         idx += 1
@@ -467,8 +475,8 @@ class SOP_Manager:
     def __init__(self, model_path):
         self.current_sop = None
         self.model = YOLO(model_path)
-        self.yaw = 0.20
-        self.tilt = 0.20
+        #self.yaw = 0.20
+        #self.tilt = 0.20
         self.sop_index = 10
         
         self.prev_cloth_frame = None
@@ -481,7 +489,7 @@ class SOP_Manager:
         self.stitches_events = []
         self.active_event =None
         self.timeout_sec = 5.0
-        
+        self.status = False # user is working or idle
         self.tracked_stitches = {}
         self.tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
         # Acción inicial
@@ -544,8 +552,7 @@ class SOP_Manager:
         tools.startProcess("orientation")
             
         
-        SOP["orientation"] = framework_yaw
-      
+        SOP["idle"] = self.status
         # ----------------------------------------------
         # Composición final
         # ----------------------------------------------
@@ -559,7 +566,7 @@ class SOP_Manager:
         if SOP["name"] == "SOP10":   
             if self.cloth_contours is not None:
                 helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours, curvature = -0.002)
-            helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
+                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
 
             #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
             #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
@@ -595,7 +602,7 @@ class SOP_Manager:
             cv2.imshow("Frame | Imagen 2D + Cilindro 3D", combined)
         
         self.rendered_frame = combined.copy()
-        
+
         if (len (self.stitches_events) > 0):
             strip = helpers.render_event_strip(self.stitches_events, scale = 0.2)
             if strip is not None and platform.system() == "Windows":
@@ -815,8 +822,6 @@ class SOP_Manager:
         ################ SOP 10
         if self.SOP["name"] == "SOP10":
             tools.startProcess("post_process1")
-         
-
             
             ### stitch event
             if len(needle_masks)>1:

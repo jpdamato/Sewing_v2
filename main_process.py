@@ -14,7 +14,7 @@ import os
 from frame_renderer.window_manager import WindowManager
 from frame_renderer.drawer import Drawer
 from frame_renderer.fonts import Font
-from inference_core import SOP_Manager,  get_data_for_unity_sop10
+from inference_core import SOP_Manager,  get_data_for_unity_sop10 , get_data_for_unity_sop30
 import tools as tools
 import helpers as helpers
 import time
@@ -31,6 +31,10 @@ from confluent_kafka import Producer
 # ==================================================
 # Configuración
 # ==================================================
+VALID_SOP_CODES = ["SOP10" , "SOP30"]
+
+PREDEFINED_VIDEOS = { "operation10_A.mp4" , "operation30_A.mp4" }
+
 VERSION = "Sewing V2.0 - 21st jan2025"
 IMAGE_2D_PATH = "SOP30-Lateral_B.png"
 MODEL_PATH = "edwards_insipiris_best_14jan.pt"
@@ -43,8 +47,11 @@ RESIZE_CAM_HEIGHT = 1080
 MAXIMIZED = False
 ENABLED_CAM = False
 
+MEDIA_SOURCE = "CAMERA"
+MEDIA_PATH = ""
+
 GLOBAL_KEY_BOARD =   0
-RUNNING_APP = True
+RUNNING_APP = False
 DEBUG = False
 RUN_OVERLAY = False
 
@@ -104,20 +111,32 @@ def main_stop():
 
 @app.route("/main_start", methods=["POST"])
 def main_start():
-    global RUNNING_APP, WS_ID , SOPCode , SessionID
+    global VALID_SOP_CODES, RUNNING_APP, WS_ID , SOPCode , SessionID 
     print("Received start")
-    
+   
     data = request.json
-    WS_ID = data.get("WS", "SOP10")
     SOPCode = data.get("SOPCode", "SOP10")
-    SessionID = data.get("SessionID", "SOP10")
+    WS_ID = data.get("WS", "WS1")
+        
+    SessionID = data.get("SessionID", "1")
 
-    response = Response(
-        response=[],
-        status=200,
-        mimetype='application/json'
-    )
-    RUNNING_APP = True
+    if (SOPCode in VALID_SOP_CODES ):
+      
+        response = Response(
+            response=[],
+            status=200,
+            mimetype='application/json'
+        )
+        RUNNING_APP = True
+
+    else:
+        response = Response(
+            response=[], description=f"SOPCode {SOPCode} not found" , 
+            status=404,
+            mimetype='application/json'
+        )
+        RUNNING_APP = False
+
     return response
 
 def generate_frames():
@@ -307,67 +326,72 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
 def run_glfw_loop( monitor_id=0):
     global RUNNING_APP ,ENABLED_CAM , sop_Manager
     
-    WINDOW_HEIGHT= 1080
-    WINDOW_WIDTH = 1920
-    
-    print ("Loading GLFW window manager")
-    wm=load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
-    font = Font.get_font()
-    summary_drawer = Drawer(font, WINDOW_WIDTH, WINDOW_HEIGHT)
-    ###  Draw using lib
-    summary_frame = np.zeros((PROCESSING_CAM_HEIGHT,PROCESSING_CAM_WIDTH , 3), dtype=np.uint8)
+    try:
+        WINDOW_HEIGHT= 1080
+        WINDOW_WIDTH = 1920
+        
+        print ("Loading GLFW window manager")
+        wm=load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
+        font = Font.get_font()
+        summary_drawer = Drawer(font, WINDOW_WIDTH, WINDOW_HEIGHT)
+        ###  Draw using lib
+        summary_frame = np.zeros((PROCESSING_CAM_HEIGHT,PROCESSING_CAM_WIDTH , 3), dtype=np.uint8)
 
-    while RUNNING_APP:
-        try:
-            tools.startProcess("glfw")
-            summary_frame[:] = 0 
-           
-            if sop_Manager is not None and sop_Manager.original_frame is not None:
-                if ENABLED_CAM:
-                    summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
-                for det in sop_Manager.detections:
-                  #  if det.name == "cloth":
-                  #      det.draw_contours(summary_frame, (255, 255, 255),width = 1)
-                    if det.name == "needle":
-                        det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
-                    elif det.name == "thread":
-                        ## only draw valid threads
-                        if det.valid:
-                            det.draw(summary_frame, (220, 55, 55),width = 2)
+        while RUNNING_APP:
+            try:
+                tools.startProcess("glfw")
+                summary_frame[:] = 0 
             
-            if sop_Manager is not None and sop_Manager.cloth_contours is not None:
-                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(0,255,255),offset=0, curvature = -0.002)
-                helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(255,0,),offset=100, curvature = -0.002)
+                if sop_Manager is not None and sop_Manager.original_frame is not None:
+                    if ENABLED_CAM:
+                        summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
+                    for det in sop_Manager.detections:
+                    #  if det.name == "cloth":
+                    #      det.draw_contours(summary_frame, (255, 255, 255),width = 1)
+                        if det.name == "needle":
+                            det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
+                        elif det.name == "thread":
+                            ## only draw valid threads
+                            if det.valid:
+                                det.draw(summary_frame, (220, 55, 55),width = 2)
+                
+                if sop_Manager is not None and sop_Manager.cloth_contours is not None:
+                    helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(0,255,255),offset=0, curvature = -0.002)
+                    helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(255,0,),offset=100, curvature = -0.002)
 
-              
-               
-           # cv2.imshow("summary_frame", summary_frame)
-            
-            summary_frame = cv2.flip(summary_frame, 0)
-            summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
-            
-            summary_frame_final = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
+                
+                
+            # cv2.imshow("summary_frame", summary_frame)
+                
+                summary_frame = cv2.flip(summary_frame, 0)
+                summary_frame = cv2.cvtColor(summary_frame, cv2.COLOR_BGR2RGB)
+                
+                summary_frame_final = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
-            if sop_Manager is not None:
-                if sop_Manager.tracking <= 0:
-                    summary_drawer.draw_text(summary_frame_final, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
+                if sop_Manager is not None:
+                    if sop_Manager.tracking <= 0:
+                        summary_drawer.draw_text(summary_frame_final, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
+                    else:
+                        summary_drawer.draw_text(summary_frame_final, "WORKING", 50, 50, (0, 255, 0), scale=3)
+                    summary_drawer.draw_text(summary_frame_final, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
+                
                 else:
-                    summary_drawer.draw_text(summary_frame_final, "WORKING", 50, 50, (0, 255, 0), scale=3)
-                summary_drawer.draw_text(summary_frame_final, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
+                    summary_drawer.draw_text(summary_frame_final, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
             
-            else:
-                summary_drawer.draw_text(summary_frame_final, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
-         
-            
-            wm.render("test_resize", summary_frame_final)
-            tools.endProcess("glfw")
-           
-        except Exception as e:
-            print(f"Exception terminating GLFW: {e}")
-            pass
+                
+                wm.render("test_resize", summary_frame_final)
+                tools.endProcess("glfw")
+            except Exception as e:
+                print(f"Exception  GLFW loop: {e}")
+                
+        
+        print ("Terminate rendering")
+        glfw.terminate()
 
-    print ("Terminate rendering")
-    glfw.terminate()
+    except Exception as e:
+        print(f"Exception  GLFW: {e}")
+        pass
+
     
 def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
     border_value=(0, 0, 0) ):
@@ -403,9 +427,10 @@ def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
 
     return out
 
-def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_rectangle=False, working_path="./data/"):
+############################################################3
+def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
-    global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager
+    global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager, DEVICE_SOURCE, MEDIA_PATH
     # ==================================================
     # Loop principal
     # ==================================================   
@@ -423,13 +448,14 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
 
     os.makedirs(working_path, exist_ok=True)
 
-    if video_path == "0":
-        video_path = 0  # Use camera
+    ####################################################    
+    if MEDIA_PATH == "0":
+        MEDIA_PATH = 0  # Use camera
 
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(MEDIA_PATH)
   
     ## sop30 = first frame = 10000
-    if (video_path == "/dev/video0" or video_path == "0"):
+    if (MEDIA_PATH == "/dev/video0" or MEDIA_PATH == "0"):
         print("using real time camera")
         step_frame = 1
     else:   
@@ -440,11 +466,10 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
     # Cargas
     # ==================================================
     if not cap.isOpened():
-        print(f"Video file not found: {video_path}")
+        print(f"Video file not found: {MEDIA_PATH}")
         return
 
-
-
+    ## Video loop
     while cap.isOpened() and RUNNING_APP:
 
         if paused:
@@ -475,9 +500,7 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
 
         ### estimate SOP
         SOP = sop_Manager.estimate_SOP(frame, frame_idx, None, sop_index = sop_index)
-
         frame_render = sop_Manager.run_frame( SOP,frame,frame_idx,  review_mode, maximized = MAXIMIZED)
-        
         
         ######## 
         ## export data to Kafka
@@ -490,18 +513,19 @@ def main_loop(video_path, monitor_id = 0,sop_index=10, start_frame=18000, has_re
             sFrame = tools.serializeFrame(None, frame_render, resizeFactor=0.1)                      
             Data["frame"] = sFrame
             Data["sop"] = SOP["name"] ## SOP 10 
-            Data["step_number"] = SOP["index"]
             Data["step_order"] = SOP["step_order"] ## 16 or 17
+            Data["idle"] = SOP["idle"] ## 'True' or 'False'
 
             if SOP["name"] == "SOP10":
                 unity_points , unity_points_ids = get_data_for_unity_sop10(sop_Manager, frame)
+            elif SOP["name"] == "SOP30":
+                unity_points , unity_points_ids = get_data_for_unity_sop30(sop_Manager, frame)
             else:
                 unity_points , unity_points_ids = [],[]
             ## bug still hardcoded points
             Data["unity_points_coords"] =unity_points #json.dumps( [] if len(unity_points) == 0 else unity_points  )
             Data["unity_points_ids"] = unity_points_ids
-            Data["grading_table"] = []
-
+            
             ### this should be thread safe
             kafka_data["frame"] = frame_render
             kafka_data["data"] = Data
@@ -536,7 +560,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="8081", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation 10_A.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation10_A.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
 
@@ -619,21 +643,28 @@ if __name__ == "__main__":
     start_kafka_thread.daemon = True
     start_kafka_thread.start()
 
-    ### run GLFW in another thread
-    if args.overlay == True:
-        render_thread = threading.Thread(target=run_glfw_loop, args=(int(args.monitor_id),))
-        render_thread.daemon = True
-        render_thread.start()
     
-    
-
+    ### check original source
     if args.device != "":
-        main_loop(args.device, monitor_id=args.monitor_id, start_frame=args.start_frame, sop_index=args.SOP)
+        MEDIA_SOURCE = "CAMERA"
+        MEDIA_PATH = args.device
     else:
-        mp4File = get_mp4_from_path(args.src)
+        MEDIA_SOURCE = "VIDEO"
+        MEDIA_PATH = args.src
+        
 
-        if mp4File is None:
-            print("Failed to open file")
-            exit()
+    while True:
+        ### wait until start message is received
+    
+        if  not RUNNING_APP: 
+            time.sleep(0.01)
+            continue
 
-        main_loop(mp4File,monitor_id= args.monitor_id,start_frame= args.start_frame, sop_index=args.SOP)
+        ### run GLFW in another thread
+        if args.overlay == True:
+            render_thread = threading.Thread(target=run_glfw_loop, args=(int(args.monitor_id),))
+            render_thread.daemon = True
+            render_thread.start()
+
+        ##message start was received
+        inference_loop( monitor_id=args.monitor_id, start_frame=args.start_frame, sop_index=args.SOP)
