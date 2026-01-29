@@ -2,9 +2,16 @@ import cv2
 import os
 from datetime import datetime
 
+
+from ultralytics import YOLO
+
+#model = YOLO("D:/Proyects/Novathena/INSIPIRIS/Sewing_v2/edwards_insipiris_best_14jan.pt")
+#model.export(format="onnx", opset=12, dynamic=True)
+
+
 # ---------------- CONFIG ----------------
-video_path = "E:/Resources/Novathena/INSIPIRIS/Operation 10_C.mp4"          # <-- tu video
-output_dir = "E:/Resources/Novathena/Train/video3"         # <-- carpeta donde guardar
+video_path = "E:/Resources/Novathena/INSIPIRIS/record_stop.mp4"          # <-- tu video
+output_dir = "E:/Resources/Novathena/Train/video4"         # <-- carpeta donde guardar
 resize_w, resize_h = 1920, 1080   # tamaño final
 step_frames = 10
 # ---------------------------------------

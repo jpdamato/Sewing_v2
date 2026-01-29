@@ -35,7 +35,7 @@ VALID_SOP_CODES = ["SOP10" , "SOP30"]
 
 PREDEFINED_VIDEOS = { "operation10_A.mp4" , "operation30_A.mp4" }
 
-VERSION = "Sewing V2.0 - 21st jan2025"
+VERSION = "Sewing V2.0 - 29st jan2025"
 IMAGE_2D_PATH = "SOP30-Lateral_B.png"
 MODEL_PATH = "edwards_insipiris_best_14jan.pt"
 
@@ -72,7 +72,7 @@ sop_Manager = None
 app = Flask(__name__)
 CORS(app)  # allow all origins
 
-@app.route("/overlay", methods=["POST"])
+@app.route("/api/overlay", methods=["POST"])
 def overlay_zoom():
     global ZOOM , TX, TY , WORKSTATION_ID
      # Check if the incoming request is JSON
@@ -87,7 +87,7 @@ def overlay_zoom():
     else:
         return "Content-Type must be application/json", 400
 
-@app.route("/main_alive", methods=["POST"])
+@app.route("/api/main_alive", methods=["GET"])
 def main_alive():
     global RUNNING_APP
     response = Response(
@@ -97,7 +97,7 @@ def main_alive():
     )
     return response
 
-@app.route("/main_stop", methods=["POST"])
+@app.route("/api/main_stop", methods=["GET"])
 def main_stop():
     global RUNNING_APP
     print("Received stop")
@@ -109,7 +109,7 @@ def main_stop():
     RUNNING_APP = False
     return response
 
-@app.route("/main_start", methods=["POST"])
+@app.route("/api/main_start", methods=["POST"])
 def main_start():
     global VALID_SOP_CODES, RUNNING_APP, WS_ID , SOPCode , SessionID 
     print("Received start")
@@ -169,7 +169,7 @@ def generate_frames():
             print (f" Error as reading frame. Exception {e}")
 
 
-@app.route("/video_feed")
+@app.route("/api/video_feed")
 def video_feed():
    return Response(generate_frames(),
                         mimetype="multipart/x-mixed-replace; boundary=frame")
@@ -197,8 +197,8 @@ class Kafka:
             Triggered by poll() or flush(). """
         if err is not None:
             print('KAFKA Message delivery failed: {}'.format(err))
-        else:
-            print('KAFKA Message delivered to {} [{}]'.format(msg.topic(), msg.partition()))
+        #else:
+        #    print('KAFKA Message delivered to {} [{}]'.format(msg.topic(), msg.partition()))
 
         
 
@@ -358,9 +358,11 @@ def run_glfw_loop( monitor_id=0):
                     if sop_Manager.active_event is not None:
                         sop_Manager.active_event.draw(summary_frame)
                     
-                    if  sop_Manager.cloth_contours is not None:
-                        helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(39,127,255),offset=100, curvature = -0.002)
-
+                    if sop_Manager.metal_framework is not None:
+                        sop_Manager.metal_framework.draw(summary_frame)
+                  #  if  sop_Manager.guideline is not None:
+                  #      sop_Manager.guideline.draw(summary_frame)
+                     
                 
                 
             # cv2.imshow("summary_frame", summary_frame)
@@ -508,6 +510,7 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
         sop_Manager.estimate_state(frame, sop_Manager.detections)
         frame_render = sop_Manager.run_frame( SOP,frame,frame_idx,  review_mode, maximized = MAXIMIZED)
         
+        sop_Manager.guideline.draw(frame_render)
         # ----------------------------------------------
         # Controles
         # ----------------------------------------------
@@ -592,14 +595,14 @@ def parse_args():
     # Create ArgumentParser object
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
-    parser.add_argument("--port", default="8081", help="Port for exposing")
+    parser.add_argument("--port", default="8082", help="Port for exposing")
     parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/valencia_sop10_Work.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
-    parser.add_argument("--model", default="edwards_insipiris_best_14jan.pt", help="Model path")
+    parser.add_argument("--model", default="edwards_insipiris_best_29jan.pt", help="Model path")
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--overlay", default=True, help="Monitor ID")
-    parser.add_argument("--start_frame", default=18000, help="Enable testing")
+    parser.add_argument("--start_frame", default=5000, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
     parser.add_argument("--SOP", default=10, help="workstation id")

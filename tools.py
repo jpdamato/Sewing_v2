@@ -3,7 +3,9 @@ import numpy as np
 import base64
 import time
 from collections import defaultdict
+from scipy.spatial import cKDTree
 
+import threading
 # --- storage interno ---
 _process_start = {}
 _process_times = defaultdict(list)
@@ -544,6 +546,8 @@ def process_needle(needle_s, img, render = False):
 
     return split_needle
 
+###################################################################
+      
 #################################################
 ###  Compute ribs
 def render_ribs(frame, ribs):
@@ -552,9 +556,8 @@ def render_ribs(frame, ribs):
         cv2.circle(frame, (int(cx), int(cy)), 2, (0,0,255), -1)
 
 
-clahe = None
-def compute_ribs(frame, mask_cloth,do_render_ribs=False):
-    global clahe
+def compute_ribs( frame, mask_cloth,do_render_ribs=False, clahe=None):
+    startProcess("compute_ribs")
     frame_cloth = cv2.bitwise_and(frame, frame, mask=mask_cloth)
     
     gray = cv2.cvtColor(frame_cloth, cv2.COLOR_BGR2GRAY)
@@ -584,7 +587,121 @@ def compute_ribs(frame, mask_cloth,do_render_ribs=False):
     if do_render_ribs:
         render_ribs(frame_cloth, holes)
    # cv2.imshow("Huecos en tela segmentada", vis)
+    endProcess("compute_ribs")
     return  holes,frame_cloth
+################################################
+### Classes
+def estimate_pixel_to_cm(points,
+                          real_dist_mm=0.01,
+                          k=4):
+    """
+    Estima relación pixel → cm usando distancia promedio entre puntos
+
+    Parámetros:
+    - points: Nx2 array en pixeles
+    - real_dist_mm: distancia real promedio entre puntos (mm)
+    - k: vecinos más cercanos
+
+    Retorna:
+    - px_to_cm
+    - cm_to_px
+    - dist_px_mean
+    """
+
+    points = np.asarray(points, np.float32)
+
+    tree = cKDTree(points)
+    dists, _ = tree.query(points, k=k+1)
+
+    # eliminar distancia a sí mismo (col 0)
+    neighbor_dists = dists[:, 1:]
+
+    # promedio robusto
+    dist_px_mean = np.median(neighbor_dists)
+
+    # conversión real
+    real_dist_cm = real_dist_mm * 0.1   # mm → cm
+
+    px_to_cm = real_dist_cm / dist_px_mean
+    cm_to_px = dist_px_mean / real_dist_cm
+
+    return px_to_cm, cm_to_px, dist_px_mean
+
+class CLAHEThread:
+    def __init__(self, clip_limit=2.0, tile_grid_size=(8, 8)):
+        self._clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+
+        self._lock = threading.Lock()
+        self._cv = threading.Condition(self._lock)
+
+        self._running = True
+        self._new_frame = False
+        self.ribs = []
+        self.px_to_cm = 0
+        self.cm_to_px = 0
+        self.dist_px_mean = 0
+
+        self._frame = None
+        self._result = None
+        self.mask_cloth = None
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def update(self, frame_bgr, mask_cloth):
+        """Recibe una imagen BGR uint8 (H,W,3)."""
+        if frame_bgr is None or frame_bgr.size == 0:
+            return False
+
+        with self._cv:
+            self._frame = frame_bgr.copy()
+            self.mask_cloth = mask_cloth.copy()
+            self._new_frame = True
+            self._cv.notify()
+        return True
+
+    def get(self):
+        """Devuelve el último resultado (o None si todavía no hay)."""
+        with self._lock:
+            return None if self._result is None else self._result.copy()
+    def draw(self, frame):
+        render_ribs(frame, self.ribs)
+
+    def stop(self):
+        with self._cv:
+            self._running = False
+            self._cv.notify()
+
+        self._thread.join(timeout=2.0)
+
+    def _loop(self):
+        while True:
+            with self._cv:
+                while self._running and not self._new_frame:
+                    self._cv.wait()
+
+                if not self._running:
+                    break
+
+                frame = self._frame
+                self._new_frame = False
+
+            # Procesar fuera del lock
+            if frame is not None and self.mask_cloth is not None:
+                out = self._apply_clahe(frame,self.mask_cloth)
+
+                with self._lock:
+                    self._result = out
+
+    def _apply_clahe(self, frame_bgr,mask_cloth):
+        try:
+          
+            self.ribs , _  = compute_ribs(frame_bgr, mask_cloth, False, self._clahe)
+            self.px_to_cm, self.cm_to_px, self.dist_px_mean = estimate_pixel_to_cm(self.ribs, real_dist_mm=1.0, k=4)
+        except Exception as e:
+            print(f"Exception computing ribs: {e}")
+        return 
+  
+
 
 ##########################################
 def extract_cloth_contour_and_bbox(mask, return_convex_hull=False):

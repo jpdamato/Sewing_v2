@@ -201,43 +201,7 @@ def intersect_line_contour(center, direction, contour):
             intersections.append(pt)
 
     return intersections
-################################################
-### Classes
-def estimate_pixel_to_cm(points,
-                          real_dist_mm=0.01,
-                          k=4):
-    """
-    Estima relación pixel → cm usando distancia promedio entre puntos
 
-    Parámetros:
-    - points: Nx2 array en pixeles
-    - real_dist_mm: distancia real promedio entre puntos (mm)
-    - k: vecinos más cercanos
-
-    Retorna:
-    - px_to_cm
-    - cm_to_px
-    - dist_px_mean
-    """
-
-    points = np.asarray(points, np.float32)
-
-    tree = cKDTree(points)
-    dists, _ = tree.query(points, k=k+1)
-
-    # eliminar distancia a sí mismo (col 0)
-    neighbor_dists = dists[:, 1:]
-
-    # promedio robusto
-    dist_px_mean = np.median(neighbor_dists)
-
-    # conversión real
-    real_dist_cm = real_dist_mm * 0.1   # mm → cm
-
-    px_to_cm = real_dist_cm / dist_px_mean
-    cm_to_px = dist_px_mean / real_dist_cm
-
-    return px_to_cm, cm_to_px, dist_px_mean
 
 #
 def draw_segmentation(frame, result, model, alpha=0.4):
@@ -482,8 +446,7 @@ class SOP_Manager:
         #self.yaw = 0.20
         #self.tilt = 0.20
         self.sop_index = 10
-        self.cloth_contours = None
-
+        
         self.current_state = STATES[0]
         self.event_detect_thread= ConsecutiveEventFSM(target_class="thread")
         self.event_detect_scissor= ConsecutiveEventFSM(target_class="scissor")
@@ -495,6 +458,8 @@ class SOP_Manager:
         self.action_mgr=ActionManager(ACTIONS)
         self.tracking=100
         self.render_ribs = False
+
+        self.distance_estimator = tools.CLAHEThread()
         ### handle stitches events
         self.stitches_events = []
         self.active_event =None
@@ -507,6 +472,11 @@ class SOP_Manager:
         self.current_action = self.action_mgr.set_action("sop10_1")
         self.rendered_frame = None
         self.model = YOLO(model_path)
+        self.cloth = None
+        self.metal_framework = None
+
+        self.guideline = helpers.VisualGuideline(color=(39,127,255),offset=100, curvature = 0.001)
+
    
     def estimate_state(self, frame, detections):
         global STATES
@@ -571,6 +541,7 @@ class SOP_Manager:
 
         ### run detections
         if SOP["name"] == "SOP30":
+           
             frame_render, _, _, detections = self.run_frame30(frame,frame_number, review_mode)
             framework_yaw = self.estimate_orientation_sop30(frame, detections, frame_number)
         else:
@@ -589,13 +560,14 @@ class SOP_Manager:
         #combined = np.hstack([frame_resized, right_stack])
         combined =  frame_render.copy()
         
-        if len(self.ribs) > 10 and self.render_ribs:
-            tools.render_ribs(combined,self.ribs )
+        if len(self.distance_estimator.ribs) > 10 and self.render_ribs:
+            self.distance_estimator.draw(combined )
 
         ### SOP 10 Helpers
         if SOP["name"] == "SOP10":   
-            if self.cloth_contours is not None:
-                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(39,127,255),offset=100, curvature = -0.002)
+            if self.cloth is not None:
+                self.guideline.update(self.cloth, self.metal_framework)
+                #render_perpendicular_curved_guideline(combined, self.cloth_contours,)
 
             #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
             #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
@@ -642,7 +614,7 @@ class SOP_Manager:
     def run_frame30(self, frame,frame_number, tracker_mgr, review_mode, maximized = False):
         tools.startProcess("Yolo")
       #  
-        results = self.model.predict(frame, conf=0.3, verbose=False)
+        results = self.model.predict(frame, conf=0.3, verbose=False,imgsz=320)
         tools.endProcess("Yolo")
         
 
@@ -710,8 +682,7 @@ class SOP_Manager:
         mask_cloth = None
         annotated = None
 
-        tools.startProcess("Yolo")
-      #  
+        tools.startProcess("Yolo")      #  
         results = self.model.predict(frame, conf=0.3, verbose=False)[0]
         
         #results = self.model.track(    frame,    persist=True, 
@@ -720,10 +691,11 @@ class SOP_Manager:
         #            verbose=False)[0]
 
                     # bbox de la tela
-        
-        annotated = results.plot()
+        try:
+            annotated = results.plot()
         #cv2.imshow("tracking", annotated)
-        
+        except:
+            annotated = None
         tools.endProcess("Yolo")
         x1, y1, x2, y2 = 0, 0, 0, 0
         
@@ -732,6 +704,7 @@ class SOP_Manager:
         cloth_contour = None
         self.detections = []
         self.cloth_visible = False
+        self.metal_framework = None
         
         #### compute cloth 
         tools.startProcess("merge_cloth_masks")
@@ -746,10 +719,14 @@ class SOP_Manager:
             cloth = SegmentedObject(  box=cloth_box,  contour=cloth_contour,name="cloth",  color=(0, 255, 0)   )
             cloth.mask = mask_cloth
             cloth.smooth(epsilon=5.0)
+            self.cloth = cloth
             self.detections.append(cloth)
         else:
-            cloth = None
+            self.cloth = None
             self.cloth_visible = False
+        
+        self.distance_estimator.update(frame, mask_cloth)
+
         #### compute other contours        
         for i, cls_id in enumerate(results.boxes.cls):
             cls_name = self.model.names[int(cls_id)]
@@ -778,6 +755,9 @@ class SOP_Manager:
                 s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
                 s.smooth(epsilon=5.0)
 
+                if cls_name == "metal_framework":
+                    self.metal_framework = s
+                
                 if cls_name == "needle":
                     needle_masks.append(s)
                     s.segment = segment
@@ -788,10 +768,10 @@ class SOP_Manager:
                
                 self.detections.append(s)  
         
-        if cloth is not None:
+        if self.cloth is not None:
             for det in self.detections:
                 if det.name == "thread":
-                    if tools.box_intersection_area(det.box , cloth.box)>0.75 and det.length < MINIMAL_THREAD_LENGTH:
+                    if tools.box_intersection_area(det.box , self.cloth.box)>0.75 and det.length < MINIMAL_THREAD_LENGTH:
                         det.valid = True
                     else:
                         det.valid = False
@@ -827,31 +807,24 @@ class SOP_Manager:
 
         tools.endProcess("tracking")
         
-        tools.startProcess("compute_ribs")
         
         frame_render = frame.copy() ##results.plot()
-       
-        self.ribs = []
-        frame_cloth = None
-        ########## compute ribs
-        if mask_cloth is not None:
-           
-            self.ribs, frame_cloth = tools.compute_ribs(frame,mask_cloth, False)
+        self.ribs = self.distance_estimator.ribs
             #### extract cloth
             #helpers.show_oriented_cloth(mask_cloth, frame, is_maximized =maximized)
             
             #if  self.prev_cloth_frame is not None:
             #    frame_render, _, _, _, = flujo_denso(  self.prev_cloth_frame,   frame_cloth,   draw=True     )
 
-        if self.ribs is not None:
+        if self.distance_estimator is not None:
             try:
-                self.px_to_cm, self.cm_to_px, self.dist_px_mean = estimate_pixel_to_cm(self.ribs, real_dist_mm=1.0, k=4)
-              
+                self.cm_to_px = self.distance_estimator.cm_to_px
+                self.dist_px_mean = self.distance_estimator.dist_px_mean
+                self.px_to_cm  = self.distance_estimator.dist_px_mean
                 #print(f"Distancia media: {dist_px_mean:.2f} px")
             except Exception as e:
                 print(f"Exception computing grid: {e}")
         
-        tools.endProcess("compute_ribs")
         map_2d =  self.action_mgr.texture
         ################ SOP 10 AND SEWING
         tools.startProcess("post_process1")
@@ -922,6 +895,11 @@ class SOP_Manager:
         if annotated is not None and platform.system() == "Windows":
             cv2.imshow("tracking", annotated)
 
+        self.distance_estimator.draw(frame_render)
+
+        if self.metal_framework is not None:
+            self.metal_framework.draw(frame_render)
+        
         ### Render straight threads
         for det in self.detections :
             if det.name == "thread":
@@ -934,7 +912,6 @@ class SOP_Manager:
             else:
                 det.draw_contours(frame_render)
       
-        self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
         tools.endProcess("rendering")
 
         

@@ -3,6 +3,58 @@ import numpy as np
 import tools as tools
 import platform
 import math
+
+##########################
+## Base class for visual helpers
+class VisualHelper:
+    def __init__(self):
+        pass
+
+    def update(self):
+        pass
+
+    def draw(self, frame, detections):
+        pass
+###############################################
+class VisualGuideline:
+    def __init__(self, color=(0,255,255),offset=0, thickness=2, curvature=0.02 ):
+        self.offset = offset
+        self.color=color
+        self.thickness=thickness
+        self.curvature=curvature
+        self.contour = None
+        self.metal_framework = None
+        self.clipped= None
+
+    def update(self, cloth, metal_framework):
+        self.contour =cloth.contour
+        self.metal_framework = metal_framework
+        ### Juan BUG
+        if self.contour is None:
+            return
+      
+        self.center, self.main_dir, self.perp_dir = tools.contour_axes(self.contour)
+
+        curve = tools.generate_perpendicular_curve(
+            self.center,
+            self.main_dir,
+            self.perp_dir,
+            curvature=self.curvature
+        )
+
+        self.clipped = tools.clip_curve_to_contour(curve,self.contour)
+
+    def draw(self,   image):        
+        if self.clipped is None:
+            return
+
+        if self.offset != 0:
+            self.clipped = offset_curve(    self.clipped,    self.main_dir, offset_px=self.offset )
+
+        draw_dotted_curve(image, self.clipped, self.color)
+    #cv2.polylines(        image,        [clipped],        isClosed=False,        color=color,
+    #    thickness=thickness,        lineType=cv2.LINE_AA    )
+
 def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
     h, w = image.shape[:2]
     center = (w / 2, h / 2)
@@ -167,36 +219,7 @@ def render_event_strip(event_frames,
 
     return cv2.hconcat(padded)
 
-def render_perpendicular_curved_guideline(
-    image,
-    contour,offset = 0,
-    color=(0, 255, 255),
-    thickness=2,
-    curvature=0.002
-):
-    if contour is None:
-        return
-    
-    center, main_dir, perp_dir = tools.contour_axes(contour)
 
-    curve = tools.generate_perpendicular_curve(
-        center,
-        main_dir,
-        perp_dir,
-        curvature=curvature
-    )
-
-    clipped = tools.clip_curve_to_contour(curve, contour)
-
-    if clipped is None:
-        return
-
-    if offset != 0:
-        clipped = offset_curve(    clipped,    main_dir, offset_px=offset )
-
-    draw_dotted_curve(image, clipped, color)
-    #cv2.polylines(        image,        [clipped],        isClosed=False,        color=color,
-    #    thickness=thickness,        lineType=cv2.LINE_AA    )
 #############################################################
 def draw_dashed_ellipse(
     img,    ellipse,
