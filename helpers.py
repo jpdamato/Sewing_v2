@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import tools as tools
 import platform
-
+import math
 def rotate_full(image, angle, border=(0,0,0), interp=cv2.INTER_CUBIC):
     h, w = image.shape[:2]
     center = (w / 2, h / 2)
@@ -65,6 +65,62 @@ def offset_curve(curve_pts, direction, offset_px):
     """
     direction = direction / np.linalg.norm(direction)
     return curve_pts + offset_px * direction
+
+def render_event_grid(event_frames, cols=4, scale=0.5, pad=5, bg_color=(0, 0, 0)):
+    """
+    images: list[np.ndarray] (BGR)
+    cols: cantidad de columnas
+    scale: escala de resize (ej 0.5)
+    pad: padding en px entre celdas
+    bg_color: color de fondo (B,G,R)
+
+    return: np.ndarray collage
+    """
+    if event_frames is None or len(event_frames) == 0:
+        return None
+
+    cols = max(1, int(cols))
+    scale = float(scale)
+
+    
+    # Redimensionar todas según scale
+    resized = []
+    for ev in event_frames:
+        if ev.frame is None:
+            continue
+
+        h, w = ev.frame.shape[:2]
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        resized.append(cv2.resize(ev.frame, (new_w, new_h), interpolation=cv2.INTER_AREA))
+
+    # Usamos el tamaño máximo para cada celda (para alinear bien)
+    cell_w = max(im.shape[1] for im in resized)
+    cell_h = max(im.shape[0] for im in resized)
+
+    n = len(resized)
+    rows = math.ceil(n / cols)
+
+    grid_w = cols * cell_w + (cols - 1) * pad
+    grid_h = rows * cell_h + (rows - 1) * pad
+
+    grid = np.full((grid_h, grid_w, 3), bg_color, dtype=np.uint8)
+
+    for idx, im in enumerate(resized):
+        r = idx // cols
+        c = idx % cols
+
+        x0 = c * (cell_w + pad)
+        y0 = r * (cell_h + pad)
+
+        # centrado dentro de la celda
+        h, w = im.shape[:2]
+        x = x0 + (cell_w - w) // 2
+        y = y0 + (cell_h - h) // 2
+
+        grid[y:y+h, x:x+w] = im
+
+    return grid
 
 def render_event_strip(event_frames,
                        scale=0.3,

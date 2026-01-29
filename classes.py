@@ -156,7 +156,13 @@ class SegmentedObject:
         
         self.box = box
         self.center, self.direction = tools.contour_center_line(contour)
+        self.start, self.end = self.get_center_line()
 
+
+    def get_length(self):
+        self.get_center_line()
+        return self.length
+    
     def get_center_line(self):
         _, (w, h), angle = self.rect
         self.length = max(w, h)
@@ -240,6 +246,79 @@ class Stitch(SegmentedObject):
     def compute_features(self):
         pass
 
+class ConsecutiveEventFSM:
+    """
+    FSM simple basada en detección consecutiva en el tiempo.
+
+    - Si detecta target_class durante >= hold_seconds consecutivos -> avanza de estado.
+    - Si se corta la detección antes -> se resetea el contador y NO avanza.
+    """
+
+    def __init__(self, target_class="X", hold_seconds=2.0, initial_state=0, max_state=None):
+        self.target_class = target_class
+        self.hold_seconds = float(hold_seconds)
+        self.state = initial_state
+        self.max_state = max_state
+
+        self._active_since = None
+        self._last_seen_time = None
+        self.changed = False
+
+    def reset(self, state=None):
+        if state is not None:
+            self.state = state
+        self._active_since = None
+        self._last_seen_time = None
+
+    def update(self, detections, t=None):
+        """
+        detected_classes: iterable (lista/set) con clases detectadas en este frame/tick
+        t: timestamp en segundos (si no se pasa, usa time.time())
+
+        return:
+            changed (bool): True si cambió de estado en este update
+            info (dict): datos útiles para debug/UI
+        """
+        if t is None:
+            t = time.time()
+
+        detected = any(getattr(obj, "name", None) == self.target_class for obj in detections)
+
+
+
+        changed = False
+
+        if detected:
+            self._last_seen_time = t
+
+            if self._active_since is None:
+                self._active_since = t
+
+            elapsed = t - self._active_since
+
+            if elapsed >= self.hold_seconds:
+                # Avanza estado
+                if self.max_state is None or self.state < self.max_state:
+                    self.state += 1
+                    changed = True
+
+                # Importante: reseteo para que no avance infinitamente en cada frame
+                self._active_since = None
+
+        else:
+            # No detectado => reseteo la racha
+            self._active_since = None
+
+        info = {
+            "state": self.state,
+            "detected": detected,
+            "active_since": self._active_since,
+            "last_seen_time": self._last_seen_time,
+            "hold_seconds": self.hold_seconds,
+        }
+        self.changed= changed
+        return changed, info
+    
 class StitchEvent:
     def __init__(self, event_id, start_frame, frame, segment):
         self.event_id = event_id
@@ -253,11 +332,34 @@ class StitchEvent:
         self.cm_to_px = 0
         self.dist_px_mean = 0
         self.coords = []
+        self.threads = []
         p1,p2, group = self.segment
         self.coords.append((p1,p2))
         self.last_coords = (p1,p2)
     #########################################
     ## segment has estimated pos + Needle detection
+    def closest_pair_between_objects(self,objA_pts, objB_pts):
+        """
+        objA_pts: [(x,y), (x,y)]  -> 2 puntos del objeto A
+        objB_pts: [(x,y), (x,y)]  -> 2 puntos del objeto B
+
+        return: (pA, pB, dist)
+        """
+        A = np.array(objA_pts, dtype=float)  # (2,2)
+        B = np.array(objB_pts, dtype=float)  # (2,2)
+
+        best = None
+        best_dist = float("inf")
+
+        for i in range(2):
+            for j in range(2):
+                d = np.linalg.norm(A[i] - B[j])
+                if d < best_dist:
+                    best_dist = d
+                    best = (tuple(A[i]), tuple(B[j]), best_dist)
+
+        return best  # (pA, pB, dist)
+
     def get_hide_stitch(self):
         p1,p2, group = self.segment
 
@@ -265,25 +367,28 @@ class StitchEvent:
             p1,p2 = s.get_center_line()
            # cv2.line(frame, p1, p2, (0,200,110), 1)
 
-        
+        ### from needle points, took the combination with minimal length
         if len(group)>=2:
-            p01,p02 = group[0].get_center_line()
+            p01,p02   = group[0].get_center_line()
             p11,p12 = group[1].get_center_line()
-           
+            
+            closest = self.closest_pair_between_objects([p01,p02], [p11, p12])
+            cp0,cp1,d = closest 
            # cv2.line(frame, p02, p11, (0,255,110), 2)
-            contour = np.array([p02,p11], dtype=np.int32).reshape((-1, 1, 2))
+            contour = np.array([cp0,cp1], dtype=np.int32).reshape((-1, 1, 2))
             self.hide_stitch = Stitch(contour , self.event_id)
+            self.last_coords = [cp0, cp1]
 
-            return [p02, p11]
+            return self.last_coords
 
         
         return []
 
     def add_frame(self, frame_number, segment):
-        p1,p2, group = self.segment
-        self.last_coords = (p1,p2)
-        self.segment=segment
+        self.get_hide_stitch()
         self.coords.append(segment)
+        self.segment = segment
+        
         self.frames.append(frame_number)
         self.last_time = time.perf_counter()
 
@@ -297,12 +402,17 @@ class StitchEvent:
             p1,p2 = s.get_center_line()
             cv2.line(frame, p1, p2, (0,200,110), 1)
         
-        if len(group)>=2:
-            p01,p02 = group[0].get_center_line()
-            p11,p12 = group[1].get_center_line()
+        if len(self.threads) > 0:
+            cv2.circle(frame, (50,50),15,(255,122,67),-1)
 
+        if len(group)>=2:
+            cp01, cp02 = self.last_coords
+
+            p01 = (int(cp01[0]), int(cp01[1]))
+            p02 = (int(cp02[0]), int(cp02[1]))
+          
+            cv2.circle(frame, p01,5,(100,100,200),5)
             cv2.circle(frame, p02,5,(100,100,200),5)
-            cv2.circle(frame, p11,5,(100,100,200),5)
            
-            cv2.line(frame, p02, p11, (0,255,110), 2)
+            cv2.line(frame, p01, p02, (0,255,110), 2)
         

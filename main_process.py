@@ -18,7 +18,7 @@ from inference_core import SOP_Manager,  get_data_for_unity_sop10 , get_data_for
 import tools as tools
 import helpers as helpers
 import time
-
+import torch
 ############################
 ### Front End interaction
 from confluent_kafka import Producer
@@ -342,22 +342,24 @@ def run_glfw_loop( monitor_id=0):
                 tools.startProcess("glfw")
                 summary_frame[:] = 0 
             
-                if sop_Manager is not None and sop_Manager.original_frame is not None:
-                    if ENABLED_CAM:
-                        summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
-                    for det in sop_Manager.detections:
-                    #  if det.name == "cloth":
-                    #      det.draw_contours(summary_frame, (255, 255, 255),width = 1)
-                        if det.name == "needle":
-                            det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
-                        elif det.name == "thread":
-                            ## only draw valid threads
-                            if det.valid:
-                                det.draw(summary_frame, (220, 55, 55),width = 2)
-                
-                if sop_Manager is not None and sop_Manager.cloth_contours is not None:
-                    helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(0,255,255),offset=0, curvature = -0.002)
-                    helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(255,0,),offset=100, curvature = -0.002)
+                if sop_Manager is not None :
+                    if sop_Manager.original_frame is not None:
+                        if ENABLED_CAM:
+                            summary_frame = cv2.resize(sop_Manager.original_frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
+                        for det in sop_Manager.detections:
+                        #  if det.name == "cloth":
+                        #      det.draw_contours(summary_frame, (255, 255, 255),width = 1)
+                            if det.name == "needle":
+                                det.draw_contours(summary_frame, (200, 125, 125),width = 1)                    
+                            elif det.name == "thread":
+                                ## only draw valid threads
+                                if det.valid:
+                                    det.draw(summary_frame, (220, 55, 55),width = 2)
+                    if sop_Manager.active_event is not None:
+                        sop_Manager.active_event.draw(summary_frame)
+                    
+                    if  sop_Manager.cloth_contours is not None:
+                        helpers.render_perpendicular_curved_guideline(summary_frame, sop_Manager.cloth_contours,color=(39,127,255),offset=100, curvature = -0.002)
 
                 
                 
@@ -369,11 +371,14 @@ def run_glfw_loop( monitor_id=0):
                 summary_frame_final = cv2.resize(summary_frame, (WINDOW_WIDTH, WINDOW_HEIGHT))
 
                 if sop_Manager is not None:
-                    if sop_Manager.tracking <= 0:
-                        summary_drawer.draw_text(summary_frame_final, "TEST RESULTS", 50, 50, (0, 255, 0), scale=3)
-                    else:
-                        summary_drawer.draw_text(summary_frame_final, "WORKING", 50, 50, (0, 255, 0), scale=3)
-                    summary_drawer.draw_text(summary_frame_final, f"Threads {len(sop_Manager.stitches_events)}", 50, 80, (0, 255, 0), scale=2)
+                    summary_drawer.draw_text(summary_frame_final,sop_Manager.current_state, 50, 50, (0, 255, 0), scale=3)
+                    valid_th = 0
+                    for ev in sop_Manager.stitches_events:
+                        if (len(ev.threads)>0):
+                            valid_th+=1
+
+                    summary_drawer.draw_text(summary_frame_final, f"Threads {len(sop_Manager.stitches_events)}::({valid_th})"
+                                             , 50, 80, (0, 255, 0), scale=2)
                 
                 else:
                     summary_drawer.draw_text(summary_frame_final, "WAITING FOR START", 50, 50, (0, 255, 0), scale=3)
@@ -500,6 +505,7 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
 
         ### estimate SOP
         SOP = sop_Manager.estimate_SOP(frame, frame_idx, None, sop_index = sop_index)
+        sop_Manager.estimate_state(frame, sop_Manager.detections)
         frame_render = sop_Manager.run_frame( SOP,frame,frame_idx,  review_mode, maximized = MAXIMIZED)
         
         ######## 
@@ -560,13 +566,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="8081", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/operation10_A.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/valencia_sop10_Work.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
     parser.add_argument("--model", default="edwards_insipiris_best_14jan.pt", help="Model path")
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--overlay", default=True, help="Monitor ID")
-    parser.add_argument("--start_frame", default=25100, help="Enable testing")
+    parser.add_argument("--start_frame", default=1, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
     parser.add_argument("--SOP", default=10, help="workstation id")
@@ -621,6 +627,9 @@ if __name__ == "__main__":
 
     print("-------------------------------------")
     print(VERSION)
+    device = 0 if torch.cuda.is_available() else "cpu"
+    print("Device usado en predict:", device)
+
     print("-------------------------------------")
     
     args = parse_args()

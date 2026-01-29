@@ -17,7 +17,7 @@ from frame_renderer.fonts import Font
 import tools as tools
 import helpers as helpers
 import time
-from classes import StitchEvent, StitchingAction, SegmentedObject, CylinderRenderer, ActionManager , TrackerManager
+from classes import ConsecutiveEventFSM,StitchEvent, StitchingAction, SegmentedObject, CylinderRenderer, ActionManager , TrackerManager
 
 # ==================================================
 # Configuración
@@ -63,6 +63,8 @@ ACTIONS = {
         tilt=-0.3
     )
 }
+
+STATES = [ "Preparing" , "Sewing" , "Checking"  ]
 
 def bbox_center(bbox):
     x1, y1, x2, y2 = bbox
@@ -479,6 +481,10 @@ class SOP_Manager:
         #self.tilt = 0.20
         self.sop_index = 10
         self.cloth_contours = None
+
+        self.current_state = STATES[0]
+        self.event_detect_thread= ConsecutiveEventFSM(target_class="thread")
+        self.event_detect_scissor= ConsecutiveEventFSM(target_class="scissor")
         
         self.prev_cloth_frame = None
         self.detections = []
@@ -486,11 +492,12 @@ class SOP_Manager:
         self.renderer = CylinderRenderer(eps=1e-3)
         self.action_mgr=ActionManager(ACTIONS)
         self.tracking=100
+        self.render_ribs = False
         ### handle stitches events
         self.stitches_events = []
         self.active_event =None
         self.original_frame = None
-        self.timeout_sec = 5.0
+        self.timeout_sec = 10.0
         self.status = False # user is working or idle
         self.tracked_stitches = {}
         self.tracker_mgr = TrackerManager(    hilo_class_id = 6,    min_samples=10)
@@ -499,6 +506,26 @@ class SOP_Manager:
         self.rendered_frame = None
         self.model = YOLO(model_path)
    
+    def estimate_state(self, frame, detections):
+        global STATES
+
+        self.event_detect_thread.update(detections)
+        self.event_detect_scissor.update(detections)
+
+        for det in self.detections:
+            if self.current_state == STATES[0]  : ### preparing:
+                if self.event_detect_thread.changed :
+                    self.current_state = STATES[1] 
+                    break
+                    
+            if self.current_state == STATES[1] : ### sewing:
+                
+                if self.event_detect_scissor.changed:
+                    self.current_state = STATES[2] ### review work 
+                    break
+
+        return self.current_state
+
     def estimate_SOP(self, frame, frame_number, detections,  sop_index):
         best_conf = 0
         ### Hardcoded SOP 10
@@ -507,12 +534,11 @@ class SOP_Manager:
 
         if self.sop_index == 10:
             self.step_order = 16
-
         
             self.tracking -= 1
             ##use previous detections
             for det in self.detections:
-                if det.name == "needle" or det.name == "scissors":
+                if det.name == "needle" or det.name == "scissor":
                     self.tracking += 1
                     break
             #############################
@@ -561,14 +587,13 @@ class SOP_Manager:
         #combined = np.hstack([frame_resized, right_stack])
         combined =  frame_render.copy()
         
-        if len(self.ribs) > 10:
+        if len(self.ribs) > 10 and self.render_ribs:
             tools.render_ribs(combined,self.ribs )
 
         ### SOP 10 Helpers
         if SOP["name"] == "SOP10":   
             if self.cloth_contours is not None:
-                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours, curvature = -0.002)
-                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(0,255,0),offset=100, curvature = -0.002)
+                helpers.render_perpendicular_curved_guideline(combined, self.cloth_contours,color=(39,127,255),offset=100, curvature = -0.002)
 
             #pts_in = np.array(sop_Manager.ribs, dtype=np.float32)  #helpers.filter_points_inside_contour(sop_Manager.ribs,sop_Manager.cloth_contours)
             #ellipse = helpers.fit_robust_ellipse(pts_in, keep_ratio=0.8)
@@ -606,7 +631,7 @@ class SOP_Manager:
         self.rendered_frame = combined.copy()
 
         if (len (self.stitches_events) > 0):
-            strip = helpers.render_event_strip(self.stitches_events, scale = 0.2)
+            strip = helpers.render_event_grid(self.stitches_events,cols=4, scale = 0.325)
             if strip is not None and platform.system() == "Windows":
                 cv2.imshow("Eventos", strip)
 
@@ -636,8 +661,8 @@ class SOP_Manager:
                 mask = masks[i]
                 
                 cls_name = result.names[int(box.cls[0])],
-                if cls_name == "scissors":
-                    self.scissors = True
+                if cls_name == "scissor":
+                    self.scissor = True
                 
                 if mask is not None:
                     mask = mask.data[0].cpu().numpy()
@@ -802,12 +827,13 @@ class SOP_Manager:
         frame_render = frame.copy() ##results.plot()
        
         self.ribs = []
+        frame_cloth = None
         ########## compute ribs
         if mask_cloth is not None:
-            frame_cloth = cv2.bitwise_and(frame, frame, mask=mask_cloth)
-            frame_cloth, self.ribs = tools.compute_ribs(frame_cloth)
+           
+            self.ribs, frame_cloth = tools.compute_ribs(frame,mask_cloth, False)
             #### extract cloth
-            helpers.show_oriented_cloth(mask_cloth, frame_cloth, is_maximized =maximized)
+            #helpers.show_oriented_cloth(mask_cloth, frame, is_maximized =maximized)
             
             #if  self.prev_cloth_frame is not None:
             #    frame_render, _, _, _, = flujo_denso(  self.prev_cloth_frame,   frame_cloth,   draw=True     )
@@ -839,9 +865,15 @@ class SOP_Manager:
                         self.active_event.px_to_cm =  self.px_to_cm
                         self.active_event.cm_to_px = self.active_event.cm_to_px
                         self.active_event.dist_px_mean= self.dist_px_mean
+
+                        for det in self.detections:
+                            if det.name == "thread":
+                                self.active_event.threads.append(det)
+                        
                         if platform.system() == "Windows":
                             self.active_event.draw(frame_render)
-                            cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
+                            self.active_event.frame = frame_render.copy()
+                           # cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
                     else:
                         # continuar evento
                         self.active_event.add_frame(frame_number,possible_stitches[0])
@@ -871,32 +903,32 @@ class SOP_Manager:
             self.cloth_contours = None
             pass
         
+        # ----------------------------------------------
+        # Rendering
+        # ----------------------------------------------
         tools.startProcess("rendering")
 
         if self.active_event is not None:
+            cv2.circle(frame, (50,1000), 3, (0,255,0))
             self.active_event.draw(frame)
         ### render helpers
         if self.cloth_visible:
             if self.step_order ==16:
                 helpers.draw_helper_SOP10_Task16(frame_render, self.detections ,self)
-        # ----------------------------------------------
-        # Render cilindro
-        # ----------------------------------------------
-        # Render cilindro usando la acción actual
-        schema =  np.zeros((400, 400, 3), dtype=np.uint8)
+        
         
         if annotated is not None and platform.system() == "Windows":
             cv2.imshow("tracking", annotated)
 
-        ###
+        ### Render straight threads
         for det in self.detections :
             if det.name == "thread":
              ## BUG JUAN
              ##   det.compute_intersection_contour(self.cloth_contours)
                 if det.valid :
-                    det.draw(frame_render, color = (0,255,0), width=2)
-                else:
-                    det.draw(frame_render, color = (0,0,255), width = 1)
+                    det.draw(frame_render, color = (232,155,30), width=2)
+                #else:
+                #    det.draw(frame_render, color = (0,0,255), width = 1)
             else:
                 det.draw_contours(frame_render)
       
@@ -914,6 +946,9 @@ class SOP_Manager:
             elif key == ord('t'):  # +30 frames
                 tools.printAverageTimes()
             
+            elif key == ord('b'):  # +30 frames
+                self.render_ribs = not self.render_ribs
+            
             elif key == ord('p'):  # +30 frames
                 paused = not paused
             elif key == ord('f'):  # +30 frames
@@ -930,5 +965,5 @@ class SOP_Manager:
                 for tv in self.valid_tracks:
                     print(tv)
  
-        return frame_render, map_2d, schema, self.detections 
+        return frame_render, map_2d, None, self.detections 
         

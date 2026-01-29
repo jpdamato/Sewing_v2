@@ -382,6 +382,62 @@ def line_contour_intersections(center, direction, contour, length=2000, step=1.0
     return pts_inside[0], pts_inside[-1]
 
 #########################################################
+def _cross2(a, b):
+    return a[0]*b[1] - a[1]*b[0]
+
+def _dot2(a, b):
+    return a[0]*b[0] + a[1]*b[1]
+
+def segments_colinear_but_not_overlapped(p1, p2, q1, q2,
+                                        eps_angle=1e-6,
+                                        eps_dist=1e-6,
+                                        eps_overlap=1e-6):
+    """
+    Retorna True si:
+      - los segmentos (p1,p2) y (q1,q2) son colineales
+      - y NO están superpuestos (overlap) en la misma recta
+
+    Retorna False si:
+      - no son colineales
+      - o son colineales pero se solapan (superpuestos)
+    """
+    p1 = np.array(p1, dtype=np.float64)
+    p2 = np.array(p2, dtype=np.float64)
+    q1 = np.array(q1, dtype=np.float64)
+    q2 = np.array(q2, dtype=np.float64)
+
+    dp = p2 - p1
+    dq = q2 - q1
+
+    lp = np.linalg.norm(dp)
+    lq = np.linalg.norm(dq)
+    if lp < eps_dist or lq < eps_dist:
+        return False  # segmento degenerado
+
+    # 1) Paralelos (cross ~ 0)
+    if abs(_cross2(dp, dq)) > eps_angle * (lp * lq):
+        return False
+
+    # 2) En la misma recta (q1 - p1) también paralelo a dp
+    if abs(_cross2(q1 - p1, dp)) > eps_dist * lp:
+        return False
+
+    # 3) Chequeo de solapamiento:
+    # Proyectamos los extremos de Q sobre el eje de P y vemos intervalos
+    u = dp / lp  # dirección unitaria sobre la recta
+    p_min, p_max = 0.0, lp
+    t1 = _dot2(q1 - p1, u)
+    t2 = _dot2(q2 - p1, u)
+    q_min, q_max = (min(t1, t2), max(t1, t2))
+
+    overlap = min(p_max, q_max) - max(p_min, q_min)
+
+    # Si overlap > 0 => se superponen (aunque sea parcialmente)
+    if overlap > eps_overlap:
+        return False  # colineales pero superpuestos => DESCARTAR
+
+    return True  # colineales y NO superpuestos
+
 def are_colinear(seg1, seg2, angle_tol=5, dist_tol=15):
     # 1. Orientación similar
     if seg1 is None or seg2 is None:
@@ -425,6 +481,23 @@ def merge_segments(needles):
     p2 = (int(x0 + vx * t_max), int(y0 + vy * t_max))
 
     return p1, p2
+
+
+def box_intersection_area(boxA, boxB):
+    """
+    boxA, boxB: np.array([x1, y1, x2, y2])
+    devuelve: area_interseccion (float)
+    """
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+
+    w = max(0.0, xB - xA)
+    h = max(0.0, yB - yA)
+
+    return w * h
+
 def process_needle(needle_s, img, render = False):
     needle_segments = []
     split_needle = []
@@ -433,7 +506,8 @@ def process_needle(needle_s, img, render = False):
        
 
         for needle in needle_s:
-            needle_segments.append(needle)
+            if needle.get_length() > 40:
+                needle_segments.append(needle)
 
         groups = []
         used = set()
@@ -448,7 +522,7 @@ def process_needle(needle_s, img, render = False):
             for j, s2 in enumerate(needle_segments):
                 if j in used:
                     continue
-                if are_colinear(s1.segment, s2.segment):
+                if are_colinear(s1.segment, s2.segment) and box_intersection_area(s1.box, s2.box)<50:
                     group.append(s2)
                     used.add(j)
 
@@ -478,16 +552,19 @@ def render_ribs(frame, ribs):
         cv2.circle(frame, (int(cx), int(cy)), 2, (0,0,255), -1)
 
 
-def compute_ribs(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+clahe = None
+def compute_ribs(frame, mask_cloth,do_render_ribs=False):
+    global clahe
+    frame_cloth = cv2.bitwise_and(frame, frame, mask=mask_cloth)
+    
+    gray = cv2.cvtColor(frame_cloth, cv2.COLOR_BGR2GRAY)
 
     # Mejorar contraste local
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    if clahe is None:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(5,5))
     gray = clahe.apply(gray)
 
-    _, bw = cv2.threshold(
-    gray, 0, 255,
-    cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, bw = cv2.threshold(  gray, 0, 255,   cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     #cv2.imshow("Binarized", bw)
 
@@ -501,13 +578,13 @@ def compute_ribs(frame):
         area = stats[i, cv2.CC_STAT_AREA]
         if min_area < area < max_area:
             holes.append([centroids[i][0], centroids[i][1]])
-
     
-    vis = frame.copy()
+    #vis = frame.copy()
 
-    render_ribs(vis, holes)
+    if do_render_ribs:
+        render_ribs(frame_cloth, holes)
    # cv2.imshow("Huecos en tela segmentada", vis)
-    return vis , holes
+    return  holes,frame_cloth
 
 ##########################################
 def extract_cloth_contour_and_bbox(mask, return_convex_hull=False):
