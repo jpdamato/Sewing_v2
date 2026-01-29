@@ -508,6 +508,33 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
         sop_Manager.estimate_state(frame, sop_Manager.detections)
         frame_render = sop_Manager.run_frame( SOP,frame,frame_idx,  review_mode, maximized = MAXIMIZED)
         
+        # ----------------------------------------------
+        # Controles
+        # ----------------------------------------------
+        if platform.system() == "Windows":
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                RUNNING_APP = False
+                
+            elif key == ord('t'):  # +30 frames
+                tools.printAverageTimes()
+            
+            elif key == ord('b'):  # +30 frames
+                sop_Manager.render_ribs = not sop_Manager.render_ribs
+            
+            elif key == ord('p'):  # +30 frames
+                paused = not paused
+            elif key == ord('f'):  # +30 frames
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx + 30)
+            elif key == ord('a'):
+                yaw -= 0.05
+            elif key == ord('d'):
+                yaw += 0.05
+            elif key == ord('w'):
+                tilt += 0.05
+            elif key == ord('s'):
+                tilt -= 0.05
+           
         ######## 
         ## export data to Kafka
         Data = {}
@@ -572,7 +599,7 @@ def parse_args():
     parser.add_argument("--model", default="edwards_insipiris_best_14jan.pt", help="Model path")
     parser.add_argument("--monitor_id", default=0, help="Monitor ID")
     parser.add_argument("--overlay", default=True, help="Monitor ID")
-    parser.add_argument("--start_frame", default=1, help="Enable testing")
+    parser.add_argument("--start_frame", default=18000, help="Enable testing")
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
     parser.add_argument("--SOP", default=10, help="workstation id")

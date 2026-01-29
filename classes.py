@@ -384,35 +384,49 @@ class StitchEvent:
         
         return []
 
-    def add_frame(self, frame_number, segment):
+    def add_frame(self, frame_number, segment, detections):
         self.get_hide_stitch()
         self.coords.append(segment)
         self.segment = segment
         
         self.frames.append(frame_number)
         self.last_time = time.perf_counter()
+        for det in detections:
+            if det.name == "thread":
+                self.threads.append(det)
+
 
     def is_expired(self, timeout_sec):
         return (time.perf_counter() - self.last_time) > timeout_sec
 
     def draw(self, frame):
         p1,p2, group = self.segment
-
+        ### draw the group of needle
         for s in group:
             p1,p2 = s.get_center_line()
             cv2.line(frame, p1, p2, (0,200,110), 1)
-        
+            
+        ## show as there are threads
         if len(self.threads) > 0:
             cv2.circle(frame, (50,50),15,(255,122,67),-1)
 
+        ## render 
         if len(group)>=2:
             cp01, cp02 = self.last_coords
 
             p01 = (int(cp01[0]), int(cp01[1]))
             p02 = (int(cp02[0]), int(cp02[1]))
           
-            cv2.circle(frame, p01,5,(100,100,200),5)
-            cv2.circle(frame, p02,5,(100,100,200),5)
+            distance_2d = math.dist(p01, p02)
+
+            if distance_2d < 200:
+                color = (0,225,110)
+            else:
+                color = (0,110, 225)
+
+            ### draw the empty space
+            cv2.circle(frame, p01,5,color,5)
+            cv2.circle(frame, p02,5,color,5)
            
-            cv2.line(frame, p01, p02, (0,255,110), 2)
+            cv2.line(frame, p01, p02, color, 2)
         

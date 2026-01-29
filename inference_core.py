@@ -29,6 +29,8 @@ RESIZE_CAM_HEIGHT = 720
 CLASE_HILO = 6
 CLASE_TELA = 0
 
+MINIMAL_THREAD_LENGTH = 100
+
 #######
 ###RULES
 ## SOP 10 : 16. if a needle is detected in parts, it is doing an stitch, and we save it
@@ -705,7 +707,6 @@ class SOP_Manager:
     def run_frame10(self, frame,frame_number,  review_mode, maximized = False):
         # ----------------------------------------------
         # ----------------------------------------------
-        needle_visible = False
         mask_cloth = None
         annotated = None
 
@@ -763,7 +764,6 @@ class SOP_Manager:
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
             if cls_name == 'needle' and review_mode:
-                needle_visible = True
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
@@ -782,15 +782,20 @@ class SOP_Manager:
                     needle_masks.append(s)
                     s.segment = segment
                 ### check if thread is valid
-                if cls_name == "thread":
-                    straight = tools.is_straight_segment([cnt])
+                #if cls_name == "thread":
+                   # straight = tools.is_straight_segment(cnt)
                    # valids = tools.filtrar_hilos_validos([cnt], cloth_contour)
-                    if (straight) : # and len(valids)>0:
-                        s.valid =True
-                    else:
-                        s.valid = False
+               
                 self.detections.append(s)  
         
+        if cloth is not None:
+            for det in self.detections:
+                if det.name == "thread":
+                    if tools.box_intersection_area(det.box , cloth.box)>0.75 and det.length < MINIMAL_THREAD_LENGTH:
+                        det.valid = True
+                    else:
+                        det.valid = False
+
         tools.endProcess("convert_to_objects")
         
         ### calculate tracking
@@ -848,9 +853,10 @@ class SOP_Manager:
         
         tools.endProcess("compute_ribs")
         map_2d =  self.action_mgr.texture
-        ################ SOP 10
-        if self.SOP["name"] == "SOP10":
-            tools.startProcess("post_process1")
+        ################ SOP 10 AND SEWING
+        tools.startProcess("post_process1")
+            
+        if self.SOP["name"] == "SOP10" and self.current_state == STATES[1] :
             
             ### stitch event
             if len(needle_masks)>1:
@@ -876,7 +882,7 @@ class SOP_Manager:
                            # cv2.imshow(f"new stitch{self.active_event.event_id}", frame_render)
                     else:
                         # continuar evento
-                        self.active_event.add_frame(frame_number,possible_stitches[0])
+                        self.active_event.add_frame(frame_number,possible_stitches[0],self.detections)
 
             # ---- chequear expiración ----
             if self.active_event is not None:
@@ -884,24 +890,20 @@ class SOP_Manager:
                 # self.closed_events.append(self.active_event)
                     self.stitches_events.append(self.active_event)
                     self.active_event = None
-            tools.endProcess("post_process1")
+        tools.endProcess("post_process1")
 
-            tools.startProcess("post_process2")
-            #################################################################
-            thread_contours = [n.contour for n in self.detections if n.name == "thread"]
-            self.cloth_contours = cloth_contour
-            
-            #################################################################3
-            if len(thread_contours) >= 3 and cloth_contour is not None:            
-                self.hilos_ok = tools.filtrar_hilos_validos(
-                    thread_contours, cloth_contour,
-                    inside_ratio_min=0.85, length_factor=2.5)
-            else:
-                self.hilos_ok = []
-            tools.endProcess("post_process2")
+        tools.startProcess("post_process2")
+        #################################################################
+        thread_contours = [n.contour for n in self.detections if n.name == "thread"]
+        self.cloth_contours = cloth_contour
+        
+        if len(thread_contours) >= 2 and cloth_contour is not None:            
+            self.hilos_ok = tools.filtrar_hilos_validos(
+                thread_contours, cloth_contour,
+                inside_ratio_min=0.85, length_factor=2.5)
         else:
-            self.cloth_contours = None
-            pass
+            self.hilos_ok = []
+        tools.endProcess("post_process2")
         
         # ----------------------------------------------
         # Rendering
@@ -927,43 +929,15 @@ class SOP_Manager:
              ##   det.compute_intersection_contour(self.cloth_contours)
                 if det.valid :
                     det.draw(frame_render, color = (232,155,30), width=2)
-                #else:
-                #    det.draw(frame_render, color = (0,0,255), width = 1)
+                else:
+                    det.draw(frame_render, color = (0,0,255), width = 1)
             else:
                 det.draw_contours(frame_render)
       
         self.prev_cloth_frame = frame_cloth.copy() if mask_cloth is not None else None
         tools.endProcess("rendering")
 
-        # ----------------------------------------------
-        # Controles
-        # ----------------------------------------------
-        if platform.system() == "Windows":
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:
-                RUNNING_APP = False
-                
-            elif key == ord('t'):  # +30 frames
-                tools.printAverageTimes()
-            
-            elif key == ord('b'):  # +30 frames
-                self.render_ribs = not self.render_ribs
-            
-            elif key == ord('p'):  # +30 frames
-                paused = not paused
-            elif key == ord('f'):  # +30 frames
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number + 30)
-            elif key == ord('a'):
-                yaw -= 0.05
-            elif key == ord('d'):
-                yaw += 0.05
-            elif key == ord('w'):
-                tilt += 0.05
-            elif key == ord('s'):
-                tilt -= 0.05
-            elif key == ord('v'):
-                for tv in self.valid_tracks:
-                    print(tv)
+        
  
         return frame_render, map_2d, None, self.detections 
         

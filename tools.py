@@ -66,8 +66,8 @@ def endProcess(process_id: str):
 
 
 def is_straight_segment(    contour,
-    max_mean_error=2.0,    max_max_error=5.0,
-    min_aspect_ratio=5.0
+    max_mean_error=6.0,    max_max_error=12.0,
+    min_aspect_ratio=0.50
 ):
     """
     Decide si un contorno corresponde a un segmento recto.
