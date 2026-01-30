@@ -9,6 +9,7 @@ import argparse
 import json
 import base64
 import glfw
+import moderngl
 import math
 import os
 from frame_renderer.window_manager import WindowManager
@@ -65,7 +66,6 @@ kafka_data = {}
 kafka_instance = None
 sop_Manager = None
 STEP_FRAME = 10
-
 
 ########################################################
 ###  Class for handling real time streaming usin REST methods
@@ -321,7 +321,7 @@ def load_window_manager(WINDOW_WIDTH, WINDOW_HEIGHT, monitor_id=0):
     glfw.make_context_current(window.glfw_window)
     glfw.set_key_callback( window.glfw_window , on_key)
 
-    return wm
+    return wm, window
 
 ###################################################
 def run_glfw_loop( monitor_id=0):
@@ -332,7 +332,7 @@ def run_glfw_loop( monitor_id=0):
         WINDOW_WIDTH = 1920
         
         print ("Loading GLFW window manager")
-        wm=load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
+        wm, window = load_window_manager(WINDOW_HEIGHT, WINDOW_WIDTH, monitor_id=monitor_id)
         font = Font.get_font()
         summary_drawer = Drawer(font, WINDOW_WIDTH, WINDOW_HEIGHT)
         ###  Draw using lib
@@ -360,7 +360,10 @@ def run_glfw_loop( monitor_id=0):
                         sop_Manager.active_event.draw(summary_frame)
                     
                     if sop_Manager.metal_framework is not None:
-                        sop_Manager.metal_framework.draw(summary_frame)
+                        sop_Manager.metal_framework.draw(summary_frame, color = tools.material_colors["metal_framework"])
+                   ## check if needle is close to a good position
+                    sop_Manager.render_needle_next_position(summary_frame)
+      
                   #  if  sop_Manager.guideline is not None:
                   #      sop_Manager.guideline.draw(summary_frame)
                      
@@ -394,7 +397,9 @@ def run_glfw_loop( monitor_id=0):
                 
         
         print ("Terminate rendering")
-        glfw.terminate()
+        window.ctx.release()
+        wm.close_all_windows()
+        glfw.make_context_current(None)
 
     except Exception as e:
         print(f"Exception  GLFW: {e}")
@@ -585,12 +590,7 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
     #################################
     cap.release()
     cv2.destroyAllWindows()
-    #####
-    try:
-        glfw.terminate()
-    except Exception as e:
-        print(f"Exception terminating GLFW: {e}")
-        pass 
+   
 ###############################################################################
 def parse_args():
     # Create ArgumentParser object
@@ -675,6 +675,11 @@ if __name__ == "__main__":
     if args.debug in args:
         DEBUG = True
 
+    if not glfw.init():
+        print("Error initializing GLFW")
+        args.overlay = False
+
+
     ## RUN API
     t = threading.Thread(target=start_API, args=(int(args.port),))
     t.daemon = True
@@ -710,3 +715,8 @@ if __name__ == "__main__":
 
         ##message start was received
         inference_loop( monitor_id=args.monitor_id, start_frame=args.start_frame, sop_index=args.SOP)
+        if args.overlay == True:
+            render_thread.join()
+
+    ########################################
+    glfw.terminate()

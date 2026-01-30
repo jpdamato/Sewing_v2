@@ -10,7 +10,18 @@ import threading
 _process_start = {}
 _process_times = defaultdict(list)
 
+material_colors = { "ribs" : (130,130,150),
+                     "cloth" : (200,180,180),
+                     "thread" : (220, 100,50),
+                     "globes" : (50, 130,130),
+                      "needle" : (220, 50,120),
+                       "metal_framework" : (130,60,60),
+                        "framework" : (130,60,60)  }
 
+def dist(p1, p2):
+    p1 = np.array(p1, dtype=np.float32)
+    p2 = np.array(p2, dtype=np.float32)
+    return float(np.linalg.norm(p1 - p2))
 
 def draw_center_line(img,  center, direction, length, color = (0,0,255) ):
     
@@ -550,10 +561,10 @@ def process_needle(needle_s, img, render = False):
       
 #################################################
 ###  Compute ribs
-def render_ribs(frame, ribs):
+def render_ribs(frame, ribs, color):
     for hole in ribs:
         cx, cy = hole
-        cv2.circle(frame, (int(cx), int(cy)), 2, (0,0,255), -1)
+        cv2.circle(frame, (int(cx), int(cy)), 2, color, -1)
 
 
 def compute_ribs( frame, mask_cloth,do_render_ribs=False, clahe=None):
@@ -663,8 +674,8 @@ class CLAHEThread:
         """Devuelve el último resultado (o None si todavía no hay)."""
         with self._lock:
             return None if self._result is None else self._result.copy()
-    def draw(self, frame):
-        render_ribs(frame, self.ribs)
+    def draw(self, frame, color):
+        render_ribs(frame, self.ribs, color)
 
     def stop(self):
         with self._cv:

@@ -411,6 +411,57 @@ def render_guideline(frame, hilos_contours, contorno_tela,
     return frame
 
 
+
+def contour_closest_to_screen_center(detections,  frame_shape):
+    """
+    contours: lista de contornos OpenCV (cada uno Nx1x2 o Nx2)
+    frame_shape: shape del frame (H,W) o (H,W,C)
+
+    return:
+        best_contour: contorno elegido (o None)
+        best_point: (x,y) punto del contorno más cercano al centro (o None)
+        best_dist: distancia euclídea al centro (float, o inf)
+    """
+    if detections is None or len(detections) == 0:
+        return None, None, float("inf")
+
+    h, w = frame_shape[:2]
+    center = np.array([w * 0.5, h * 0.5], dtype=np.float32)
+
+    best_contour = None
+    best_point = None
+    best_dist = float("inf")
+
+    for det in detections:
+        if det.name != "needle":
+            continue
+        cnt = det.contour
+        if cnt is None or len(cnt) == 0:
+            continue
+
+        cnt = [det.start , det.center, det.end]
+        # Asegurar forma Nx2
+        pts = np.squeeze(cnt)
+        if pts.ndim == 1:
+            pts = pts.reshape(1, 2)
+
+        pts = pts.astype(np.float32)
+
+        # Distancia de todos los puntos al centro
+        dists = np.linalg.norm(pts - center, axis=1)
+
+        # Punto más cercano de este contorno al centro
+        idx = int(np.argmin(dists))
+        dmin = float(dists[idx])
+        pmin = tuple(map(int, pts[idx]))
+
+        # Comparar contra el mejor global
+        if dmin < best_dist:
+            best_dist = dmin
+            best_point = pmin
+            best_contour = cnt
+
+    return det, best_point, best_dist
 ##############################################################333
 def get_front_end_data(nFrame,  frame, SOP):
     try:
@@ -561,7 +612,7 @@ class SOP_Manager:
         combined =  frame_render.copy()
         
         if len(self.distance_estimator.ribs) > 10 and self.render_ribs:
-            self.distance_estimator.draw(combined )
+            self.distance_estimator.draw(combined, color = tools.material_colors["ribs"] )
 
         ### SOP 10 Helpers
         if SOP["name"] == "SOP10":   
@@ -675,6 +726,21 @@ class SOP_Manager:
 
         return frame_render, None, None, self.detections
     
+
+    def render_needle_next_position(self, frame_render):
+        best_cnt, best_pt, best_dist = contour_closest_to_screen_center(self.detections, frame.shape)
+        if best_cnt is not None and best_dist < 150:
+            d = 1000
+            if self.metal_framework is not None:
+                d = tools.dist(best_cnt.center, self.metal_framework.center)
+
+            if d < 200:
+                cv2.circle(frame_render, best_pt, 15, (0, 200, 55), -1)  # punto más cercano al centro
+       
+            else:    
+                cv2.circle(frame_render, best_pt, 15, (0, 55, 200), -1)  # punto más cercano al centro
+       
+
     ###########################################################################################
     def run_frame10(self, frame,frame_number,  review_mode, maximized = False):
         # ----------------------------------------------
@@ -683,7 +749,7 @@ class SOP_Manager:
         annotated = None
 
         tools.startProcess("Yolo")      #  
-        results = self.model.predict(frame, conf=0.3, verbose=False)[0]
+        results = self.model.predict(frame, conf=0.1, verbose=False)[0]
         
         #results = self.model.track(    frame,    persist=True, 
         #            conf=0.3,     classes=None,     # detecta todo
@@ -733,20 +799,25 @@ class SOP_Manager:
             cls_name = self.model.names[int(cls_id)]
             mask_np = None
             box = results.boxes.xyxy[i].cpu().numpy()
+            conf = results.boxes.conf[i].cpu().numpy()
 
-            if cls_name == "thread":
+            if cls_name == "thread" and conf > 0.3:
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
-            if cls_name == "metal_framewpork":
+            if cls_name == "metal_framework":
+                mask = results.masks.data[i]
+                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
+            
+            if cls_name == "framework":
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
-            if cls_name == 'needle' and review_mode:
+            if cls_name == 'needle' and review_mode and conf > 0.3:
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
                 #frame = draw_segmentation(frame, results, model)
-            if mask_np is not None:
+            if mask_np is not None :
                 segment =  tools.segment_from_mask(mask_np, frame.shape)
                 cnt =segment["contour"]
                 if len(cnt) == 0:
@@ -756,7 +827,10 @@ class SOP_Manager:
                 s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
                 s.smooth(epsilon=5.0)
 
-                if cls_name == "metal_framework":
+                if cls_name == "metal_framework" :
+                    self.metal_framework = s
+
+                if cls_name == "framework" and self.metal_framework is None:
                     self.metal_framework = s
                 
                 if cls_name == "needle":
@@ -888,18 +962,20 @@ class SOP_Manager:
             cv2.circle(frame, (50,1000), 3, (0,255,0))
             self.active_event.draw(frame)
         ### render helpers
-        if self.cloth_visible:
-            if self.step_order ==16:
-                helpers.draw_helper_SOP10_Task16(frame_render, self.detections ,self)
-        
+        #if self.cloth_visible:
+        #    if self.step_order ==16:
+        #        helpers.draw_helper_SOP10_Task16(frame_render, self.detections ,self)
         
         if annotated is not None and platform.system() == "Windows":
             cv2.imshow("tracking", annotated)
 
-        self.distance_estimator.draw(frame_render)
+        ## check if needle is close to a good position
+        self.render_needle_next_position(frame_render)
+      
+        self.distance_estimator.draw(frame_render, tools.material_colors["ribs"])
 
         if self.metal_framework is not None:
-            self.metal_framework.draw(frame_render)
+            self.metal_framework.draw(frame_render, color = tools.material_colors["metal_framework"])
         
         ### Render straight threads
         for det in self.detections :
@@ -910,8 +986,8 @@ class SOP_Manager:
                     det.draw(frame_render, color = (232,155,30), width=2)
                 else:
                     det.draw(frame_render, color = (0,0,255), width = 1)
-            else:
-                det.draw_contours(frame_render)
+            elif det.name in tools.material_colors:            
+                det.draw_contours(frame_render, color = tools.material_colors[det.name])
       
         tools.endProcess("rendering")
 

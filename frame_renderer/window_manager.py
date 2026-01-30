@@ -13,12 +13,13 @@ class WindowManager:
     def __init__(self):
         self.windows: dict[str, Window] = {}
         self._resize_cache: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
-        if not glfw.init():
-            print("Error initializing GLFW")
-            return
+        #if not glfw.init():
+        #    print("Error initializing GLFW")
+        #    return
 
     def __del__(self):
-        glfw.terminate()
+        pass
+        #glfw.terminate()
 
     def get_monitors(self):
         glfw_monitors: list[Any] = glfw.get_monitors()
