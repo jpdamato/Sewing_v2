@@ -430,6 +430,7 @@ def contour_closest_to_screen_center(detections,  frame_shape):
 
     best_contour = None
     best_point = None
+    best_det = None
     best_dist = float("inf")
 
     for det in detections:
@@ -460,8 +461,9 @@ def contour_closest_to_screen_center(detections,  frame_shape):
             best_dist = dmin
             best_point = pmin
             best_contour = cnt
+            best_det = det
 
-    return det, best_point, best_dist
+    return best_det, best_point, best_dist
 ##############################################################333
 def get_front_end_data(nFrame,  frame, SOP):
     try:
@@ -729,16 +731,17 @@ class SOP_Manager:
 
     def render_needle_next_position(self, frame_render):
         best_cnt, best_pt, best_dist = contour_closest_to_screen_center(self.detections, frame_render.shape)
-        if best_cnt is not None and best_dist < 150:
+        if best_cnt is not None and best_dist < 500:
             d = 1000
             if self.metal_framework is not None:
                 d = tools.dist(best_cnt.center, self.metal_framework.center)
-
-            if d < 200:
-                cv2.circle(frame_render, best_pt, 15, (0, 200, 55), -1)  # punto más cercano al centro
-       
-            else:    
-                cv2.circle(frame_render, best_pt, 15, (0, 55, 200), -1)  # punto más cercano al centro
+                ## pixels
+                if d < 90:
+                    cv2.circle(frame_render, best_pt, 15, (0, 200, 55), -1)  # punto más cercano al centro
+                elif d < 150:
+                    cv2.circle(frame_render, best_pt, 15, (0, 200, 200), -1)  # punto más cercano al centro
+                else:    
+                    cv2.circle(frame_render, best_pt, 15, (0, 55, 200), -1)  # punto más cercano al centro
        
 
     ###########################################################################################
@@ -774,13 +777,18 @@ class SOP_Manager:
         
         #### compute cloth 
         tools.startProcess("merge_cloth_masks")
-        mask_cloth = tools.merge_cloth_masks(results, cloth_class_id=0, frame_shape=frame.shape)
+        mask_cloth = tools.merge_cloth_masks(results, filter_class_ids=[0], frame_shape=frame.shape)
         cloth_contour, cloth_box = tools.extract_cloth_contour_and_bbox(mask_cloth)
         tools.endProcess("merge_cloth_masks")
         
+        tools.startProcess("merge_framework_class")
+        mask_framework = tools.merge_cloth_masks(results, filter_class_ids=[1,3], frame_shape=frame.shape, max_x=frame.shape[1]/2)
+        framework_contour, framework_box = tools.extract_cloth_contour_and_bbox(mask_framework)
+        tools.endProcess("merge_framework_class")
         
+
         tools.startProcess("convert_to_objects")
-        
+        ##select cloth
         if cloth_contour is not None:
             cloth = SegmentedObject(  box=cloth_box,  contour=cloth_contour,name="cloth",  color=(0, 255, 0)   )
             cloth.mask = mask_cloth
@@ -790,6 +798,15 @@ class SOP_Manager:
         else:
             self.cloth = None
             self.cloth_visible = False
+        ##select framework
+        if framework_contour is not None:
+            self.metal_framework = SegmentedObject(  box=framework_box,  contour=framework_contour,name="metal_framework",  color=(0, 255, 0)   )
+            self.metal_framework.mask = mask_cloth
+            self.metal_framework.smooth(epsilon=5.0)
+            self.detections.append(self.metal_framework)
+        else:
+            self.metal_framework = None
+           
         
         if mask_cloth is not None:
             self.distance_estimator.update(frame, mask_cloth)
@@ -805,12 +822,15 @@ class SOP_Manager:
                 mask = results.masks.data[i]
                 mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
             if cls_name == "metal_framework":
-                mask = results.masks.data[i]
-                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
+                continue
+               # mask = results.masks.data[i]
+               # mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
             
             if cls_name == "framework":
-                mask = results.masks.data[i]
-                mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
+                continue
+
+              #  mask = results.masks.data[i]
+              #  mask_np = (mask.cpu().numpy() * 255).astype(np.uint8)
                 
             if cls_name == 'needle' and review_mode and conf > 0.3:
                 mask = results.masks.data[i]
@@ -827,11 +847,16 @@ class SOP_Manager:
                 s.track_id = results.boxes.id[i].cpu().numpy().astype(int) if results.boxes.id is not None else -1
                 s.smooth(epsilon=5.0)
 
-                if cls_name == "metal_framework" :
-                    self.metal_framework = s
-
-                if cls_name == "framework" and self.metal_framework is None:
-                    self.metal_framework = s
+                #####
+                if cls_name == "metal_framework" or  cls_name == "framework":
+                    s.smooth()
+                    ## discar segmentations too much on the right
+                    if s.center[0] > frame.shape[1]/2+10:
+                        continue
+                    if cls_name == "metal_framework" :
+                        self.metal_framework = s
+                    elif cls_name == "framework" and self.metal_framework is None:
+                        self.metal_framework = s
                 
                 if cls_name == "needle":
                     needle_masks.append(s)

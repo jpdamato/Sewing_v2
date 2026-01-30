@@ -147,6 +147,7 @@ class SegmentedObject:
         self.valid = True
         self.track_id = -1
         self.length = 0
+        self.skeleton_points = []
 
         all_points = np.vstack([contour])
         if len(contour) > 0:
@@ -202,6 +203,10 @@ class SegmentedObject:
 
     def compute_features(self):
         pass
+   
+ 
+    def skeletonize(self, frame):
+        self.skeleton_points, _ = tools.contour_to_skeleton_points(self.contour)
 
     def draw(self, frame, color=(0, 0, 255), width=2):
         self.get_center_line()
@@ -211,6 +216,8 @@ class SegmentedObject:
         for pt in self.intersections:
             cv2.circle(frame, tuple(pt.astype(int)), 5, (0, 0, 255), -1)
     
+        for (x, y) in self.skeleton_points:
+            cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
          # Draw rectangle on original image
         #cv2.drawContours(frame, [self.contour], 0, color, width)
 

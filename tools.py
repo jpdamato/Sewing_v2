@@ -4,6 +4,8 @@ import base64
 import time
 from collections import defaultdict
 from scipy.spatial import cKDTree
+from skimage.morphology import skeletonize as sk_skeletonize
+
 
 import threading
 # --- storage interno ---
@@ -17,6 +19,48 @@ material_colors = { "ribs" : (130,130,150),
                       "needle" : (220, 50,120),
                        "metal_framework" : (130,60,60),
                         "framework" : (130,60,60)  }
+
+#########################################################
+def skeletonize_mask(mask):
+    """
+    Skeletonize a binary mask and return a list of (x, y) coordinates.
+    """
+    # Ensure binary
+    binary = (mask > 0).astype(np.uint8)
+
+    # Use scikit-image for clean skeletonization
+    skeleton = sk_skeletonize(binary > 0)
+
+    # Extract coordinates (as (x, y))
+    points = np.column_stack(np.where(skeleton > 0))
+    points = [(int(y), int(x)) for x, y in points]
+    return points, (skeleton * 255).astype(np.uint8)
+#########################################################
+def contour_to_skeleton_points(contour, margin=10):
+    """
+    From a contour (list of (x, y)), get skeleton points automatically.
+    `margin` adds padding around the contour to avoid edge clipping.
+    """
+    contour = np.array(contour, dtype=np.int32)
+
+    # Compute bounding box automatically
+    x, y, w, h = cv2.boundingRect(contour)
+    shape = (h + 2 * margin, w + 2 * margin)
+
+    # Shift contour to local coordinates inside the mask
+    shifted = contour - [x - margin, y - margin]
+
+    # Draw filled contour mask
+    mask = np.zeros(shape, np.uint8)
+    cv2.drawContours(mask, [shifted], -1, 255, thickness=cv2.FILLED)
+
+    # Skeletonize
+    points, skeleton_img = skeletonize_mask(mask)
+
+    # Re-shift points back to original coordinates
+    points = [(px + x - margin, py + y - margin) for (px, py) in points]
+
+    return points, skeleton_img
 
 def dist(p1, p2):
     p1 = np.array(p1, dtype=np.float32)
@@ -754,23 +798,26 @@ def extract_cloth_contour_and_bbox(mask, return_convex_hull=False):
 
         return mx_cnt, bbox
         
-def merge_cloth_masks(result, cloth_class_id, frame_shape):
+def merge_cloth_masks(result, filter_class_ids, frame_shape, max_x = 10000):
     """
     Une todas las instancias de 'tela' en una sola máscara binaria
     """
     if result.masks is None:
         return None
-
+  # Get the bounding boxes from the result object
+    boxes = result.boxes
     masks = result.masks.data.cpu().numpy()  # (N, Hm, Wm)
     classes = result.boxes.cls.cpu().numpy().astype(int)
-
+   
     if len(masks) > 0:
         merged = np.zeros_like(masks[0], dtype=np.uint8)
     else:
         return None
-    
+    ########################################
     for i, cls in enumerate(classes):
-        if cls == cloth_class_id:
+        coords_xyxy = boxes.xyxy[i].cpu().numpy().astype(np.int32)
+        x1, y1, x2, y2 = coords_xyxy    
+        if cls in filter_class_ids and ((x1+x2)/2 <max_x) :
             merged |= (masks[i] > 0.5).astype(np.uint8)
 
     # escalar al tamaño del frame
