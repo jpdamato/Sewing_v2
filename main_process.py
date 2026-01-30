@@ -64,6 +64,7 @@ TY = 0.0
 kafka_data = {}
 kafka_instance = None
 sop_Manager = None
+STEP_FRAME = 10
 
 
 ########################################################
@@ -437,7 +438,7 @@ def translate_and_zoom(    image,    zoom=1.0,    dx=0,    dy=0,
 ############################################################3
 def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangle=False, working_path="./data/"):
     global RUNNING_APP, GLOBAL_KEY_BOARD, MAXIMIZED, ENABLED_CAM, kafka_data
-    global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager, DEVICE_SOURCE, MEDIA_PATH
+    global ZOOM , TX, TY , WORKSTATION_ID, sop_Manager,STEP_FRAME, DEVICE_SOURCE, MEDIA_PATH
     # ==================================================
     # Loop principal
     # ==================================================   
@@ -467,7 +468,7 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
         step_frame = 1
     else:   
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        step_frame = 10
+        step_frame = STEP_FRAME
     
     # ==================================================
     # Cargas
@@ -497,7 +498,7 @@ def inference_loop( monitor_id = 0,sop_index=10, start_frame=18000, has_rectangl
 
         frame = cv2.resize(frame, (PROCESSING_CAM_WIDTH, PROCESSING_CAM_HEIGHT))
         
-        if frame_idx % step_frame != 0:
+        if (step_frame > 1) and (frame_idx % step_frame != 0):
             continue
 
         fh, fw = frame.shape[:2]
@@ -606,6 +607,7 @@ def parse_args():
     parser.add_argument("--maximized", default=False, help="Enable testing")
     parser.add_argument("--ws_id", default=0, help="workstation id")
     parser.add_argument("--SOP", default=10, help="workstation id")
+    parser.add_argument("--step", default=10, help="number of frames to avoid")
     
     # Parse the arguments
     args = parser.parse_args()
@@ -630,7 +632,7 @@ def get_mp4_from_path(path: str) -> str | None:
             return path
         else:
             return None
-
+   
     # Case 2: path is a directory
     if os.path.isdir(path):
         mp4_files = []
@@ -669,6 +671,7 @@ if __name__ == "__main__":
     MAXIMIZED = args.maximized
     WS_ID = args.ws_id
     RUN_OVERLAY = args.overlay
+    STEP_FRAME = int( args.step)
     if args.debug in args:
         DEBUG = True
 

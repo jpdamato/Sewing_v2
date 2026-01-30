@@ -725,7 +725,8 @@ class SOP_Manager:
             self.cloth = None
             self.cloth_visible = False
         
-        self.distance_estimator.update(frame, mask_cloth)
+        if mask_cloth is not None:
+            self.distance_estimator.update(frame, mask_cloth)
 
         #### compute other contours        
         for i, cls_id in enumerate(results.boxes.cls):
