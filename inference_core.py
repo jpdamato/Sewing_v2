@@ -728,7 +728,7 @@ class SOP_Manager:
     
 
     def render_needle_next_position(self, frame_render):
-        best_cnt, best_pt, best_dist = contour_closest_to_screen_center(self.detections, frame.shape)
+        best_cnt, best_pt, best_dist = contour_closest_to_screen_center(self.detections, frame_render.shape)
         if best_cnt is not None and best_dist < 150:
             d = 1000
             if self.metal_framework is not None:
