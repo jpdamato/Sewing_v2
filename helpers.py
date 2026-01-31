@@ -364,6 +364,35 @@ def draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=10, gap=6):
 
         cv2.line(img, (xs, ys), (xe, ye), color, thickness)
 
+###########################################################################################
+def render_cylinder(texture, out_size=(400, 400),
+                         yaw=0.0, tilt=0.0,
+                         step_u=2, step_v=2):
+    Ht, Wt = texture.shape[:2]
+    Hr, Wr = out_size
+
+    render = np.zeros((Hr, Wr, 3), dtype=np.uint8)
+
+    cx = Wr // 2
+    R = int(Wr * 0.35)
+
+    for v in range(0, Ht, step_v):
+        z_norm = v / Ht
+        y_base = int(z_norm * Hr)
+
+        for u in range(0, Wt, step_u):
+            theta = 2 * np.pi * (u / Wt)
+            theta_rot = theta + yaw
+
+            x = int(cx + R * np.sin(theta_rot))
+            y = y_base + int(np.sin(tilt) * np.cos(theta_rot) * R)
+
+            if 0 <= x < Wr and 0 <= y < Hr:
+                render[y, x] = texture[v, u]
+
+    return render
+
+
 
 def draw_helper_SOP10_Task16(frame_render, detections , sop_maanager):
     x1, y1, x2, y2 = 0, 0, 0, 0

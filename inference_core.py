@@ -125,35 +125,6 @@ def select_best_pair(detections, frame_shape,
                 best_pair = (d1, d2)
 
     return best_pair, best_score
-
-def render_cylinder(texture, out_size=(400, 400),
-                         yaw=0.0, tilt=0.0,
-                         step_u=2, step_v=2):
-    Ht, Wt = texture.shape[:2]
-    Hr, Wr = out_size
-
-    render = np.zeros((Hr, Wr, 3), dtype=np.uint8)
-
-    cx = Wr // 2
-    R = int(Wr * 0.35)
-
-    for v in range(0, Ht, step_v):
-        z_norm = v / Ht
-        y_base = int(z_norm * Hr)
-
-        for u in range(0, Wt, step_u):
-            theta = 2 * np.pi * (u / Wt)
-            theta_rot = theta + yaw
-
-            x = int(cx + R * np.sin(theta_rot))
-            y = y_base + int(np.sin(tilt) * np.cos(theta_rot) * R)
-
-            if 0 <= x < Wr and 0 <= y < Hr:
-                render[y, x] = texture[v, u]
-
-    return render
-
-
 #######################################################
 def intersect_line_segment(p, d, a, b, eps=1e-6):
     """
@@ -412,7 +383,7 @@ def render_guideline(frame, hilos_contours, contorno_tela,
 
 
 
-def contour_closest_to_screen_center(detections,  frame_shape):
+def needle_contour_closest_to_screen_center(detections,  frame_shape):
     """
     contours: lista de contornos OpenCV (cada uno Nx1x2 o Nx2)
     frame_shape: shape del frame (H,W) o (H,W,C)
@@ -432,7 +403,7 @@ def contour_closest_to_screen_center(detections,  frame_shape):
     best_point = None
     best_det = None
     best_dist = float("inf")
-
+    ##check needles distance
     for det in detections:
         if det.name != "needle":
             continue
@@ -730,15 +701,27 @@ class SOP_Manager:
     
 
     def render_needle_next_position(self, frame_render):
-        best_cnt, best_pt, best_dist = contour_closest_to_screen_center(self.detections, frame_render.shape)
+        ### convert pixels to distance
+
+        if self.metal_framework is not None:
+            stepY = 50 
+            offsetX = 100
+            for i in range(-5, 5):
+                center = (frame_render.shape[1]/2+offsetX, frame_render.shape[0]/2 + i*stepY)
+                d, p, _ = tools.min_distance_point_to_polygon(center, self.metal_framework.contour)
+                cv2.circle(frame_render, (int(p[0])+20, int(p[1])), 15, (200, 55, 55), -1)  # punto más cercano al centro
+                
+        return 
+    
+        best_cnt, best_pt, best_dist = needle_contour_closest_to_screen_center(self.detections, frame_render.shape)
         if best_cnt is not None and best_dist < 500:
             d = 1000
             if self.metal_framework is not None:
-                d = tools.dist(best_cnt.center, self.metal_framework.center)
-                ## pixels
-                if d < 90:
+                d = tools.min_distance_point_to_polygon(best_pt, self.metal_framework.contour)
+                ## pixels !!! BUG..
+                if d < 50:
                     cv2.circle(frame_render, best_pt, 15, (0, 200, 55), -1)  # punto más cercano al centro
-                elif d < 150:
+                elif d < 100:
                     cv2.circle(frame_render, best_pt, 15, (0, 200, 200), -1)  # punto más cercano al centro
                 else:    
                     cv2.circle(frame_render, best_pt, 15, (0, 55, 200), -1)  # punto más cercano al centro
@@ -792,7 +775,8 @@ class SOP_Manager:
         if cloth_contour is not None:
             cloth = SegmentedObject(  box=cloth_box,  contour=cloth_contour,name="cloth",  color=(0, 255, 0)   )
             cloth.mask = mask_cloth
-            cloth.smooth(epsilon=5.0)
+            cloth.resample()
+            cloth.smooth(epsilon=15.0)
             self.cloth = cloth
             self.detections.append(cloth)
         else:
@@ -802,6 +786,8 @@ class SOP_Manager:
         if framework_contour is not None:
             self.metal_framework = SegmentedObject(  box=framework_box,  contour=framework_contour,name="metal_framework",  color=(0, 255, 0)   )
             self.metal_framework.mask = mask_cloth
+            self.metal_framework.resample()
+            
             self.metal_framework.smooth(epsilon=5.0)
             self.detections.append(self.metal_framework)
         else:
@@ -910,8 +896,8 @@ class SOP_Manager:
         
         frame_render = frame.copy() ##results.plot()
         self.ribs = self.distance_estimator.ribs
-            #### extract cloth
-            #helpers.show_oriented_cloth(mask_cloth, frame, is_maximized =maximized)
+        #### extract cloth
+        helpers.show_oriented_cloth(mask_cloth, frame, is_maximized =maximized)
             
             #if  self.prev_cloth_frame is not None:
             #    frame_render, _, _, _, = flujo_denso(  self.prev_cloth_frame,   frame_cloth,   draw=True     )

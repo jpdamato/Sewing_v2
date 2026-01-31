@@ -203,7 +203,9 @@ class SegmentedObject:
 
     def compute_features(self):
         pass
-   
+    
+    def resample(self):
+        self.contour =tools.resample_contour_fixed_n(self.contour, 50)
  
     def skeletonize(self, frame):
         self.skeleton_points, _ = tools.contour_to_skeleton_points(self.contour)

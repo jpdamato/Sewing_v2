@@ -597,7 +597,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Parse command-line arguments for video processing.")
    # Define command-line arguments with optional flags
     parser.add_argument("--port", default="8082", help="Port for exposing")
-    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/buffer/buffer_1.mp4", help="Video source")
+    parser.add_argument("--src", default="E:/Resources/Novathena/INSIPIRIS/newconf_frame_02.mp4", help="Video source")
     parser.add_argument("--device", default="", help="Video source")
     parser.add_argument("--debug", default="", help="Run debug")
     parser.add_argument("--model", default="edwards_insipiris_best_29jan.pt", help="Model path")

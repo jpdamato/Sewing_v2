@@ -756,9 +756,98 @@ class CLAHEThread:
             print(f"Exception computing ribs: {e}")
         return 
   
+###########################################################################################
+def picture_in_picture_bottom_left(frame_main, frame_pip, scale=0.3, margin=10):
+    """
+    frame_main: imagen base (H,W,3)
+    frame_pip: imagen que se inserta (cualquier tamaño)
+    scale: tamaño relativo del pip respecto al ancho del main (ej: 0.3 = 30%)
+    margin: margen en pixeles
 
+    return: frame_main con pip insertado
+    """
+    out = frame_main.copy()
 
+    H, W = out.shape[:2]
+
+    pip_w = int(W * scale)
+    pip_h = int(frame_pip.shape[0] * (pip_w / frame_pip.shape[1]))
+
+    pip = cv2.resize(frame_pip, (pip_w, pip_h), interpolation=cv2.INTER_AREA)
+
+    # posición bottom-left
+    x1 = margin
+    y1 = H - pip_h - margin
+    x2 = x1 + pip_w
+    y2 = y1 + pip_h
+
+    # recorte por si no entra
+    if x2 > W or y1 < 0:
+        return out
+
+    out[y1:y2, x1:x2] = pip
+    return out
 ##########################################
+def closest_point_on_segment(p, a, b, eps=1e-12):
+    """
+    p, a, b: np.array([x,y])
+    return: (closest_point, t) donde t in [0,1]
+    """
+    ab = b - a
+    ab2 = float(np.dot(ab, ab))
+    if ab2 < eps:
+        return a.copy(), 0.0
+
+    t = float(np.dot(p - a, ab) / ab2)
+    t = max(0.0, min(1.0, t))
+    c = a + t * ab
+    return c, t
+
+
+def min_distance_point_to_polygon(point, polygon):
+    """
+    point: (x,y)
+    polygon: contorno OpenCV (Nx1x2) o array (N,2)
+
+    return:
+      dist_min (float): distancia mínima al borde
+      closest_pt (tuple): (x,y) punto más cercano sobre el borde
+      inside (bool): True si el punto está dentro del polígono
+    """
+    p = np.array(point, dtype=np.float64)
+
+    poly = np.asarray(polygon)
+    if poly.ndim == 3:   # Nx1x2
+        poly = poly.reshape(-1, 2)
+    poly = poly.astype(np.float64)
+
+    n = len(poly)
+    if n < 2:
+        return float("inf"), None, False
+
+    # inside/outside usando OpenCV (solo informativo)
+    inside = cv2.pointPolygonTest(poly.reshape(-1, 1, 2).astype(np.float32),
+                                  (float(p[0]), float(p[1])),
+                                  False) >= 0
+
+    dist_min = float("inf")
+    closest_pt = None
+
+    # recorrer segmentos del polígono (cerrado)
+    for i in range(n):
+        a = poly[i]
+        b = poly[(i + 1) % n]
+
+        c, _ = closest_point_on_segment(p, a, b)
+        d = np.linalg.norm(p - c)
+
+        if d < dist_min:
+            dist_min = d
+            closest_pt = (float(c[0]), float(c[1]))
+
+    return float(dist_min), closest_pt, bool(inside)
+
+
 def extract_cloth_contour_and_bbox(mask, return_convex_hull=False):
     """
     A partir de una máscara binaria:
@@ -836,3 +925,39 @@ def merge_cloth_masks(result, filter_class_ids, frame_shape, max_x = 10000):
 
 
     return merged
+
+def resample_contour_fixed_n(contour, n_samples=50, closed=True):
+    """
+    contour: OpenCV contour (Nx1x2) o (Nx2)
+    n_samples: cantidad final de puntos (ej 50)
+    closed: si el contorno es cerrado (True) o una polilínea (False)
+
+    return: (n_samples, 1, 2) int32 (formato OpenCV)
+    """
+    pts = contour.reshape(-1, 2).astype(np.float32)
+
+    # Si es cerrado, asegurar que el último punto sea igual al primero
+    if closed:
+        if np.linalg.norm(pts[0] - pts[-1]) > 1e-6:
+            pts = np.vstack([pts, pts[0]])
+
+    # Distancias acumuladas
+    diffs = np.diff(pts, axis=0)
+    seg_lens = np.linalg.norm(diffs, axis=1)
+    cumdist = np.concatenate([[0.0], np.cumsum(seg_lens)])
+    total_len = cumdist[-1]
+
+    if total_len < 1e-6:
+        # Contorno degenerado
+        out = np.repeat(pts[:1], n_samples, axis=0)
+        return out.reshape(-1, 1, 2).astype(np.int32)
+
+    # Targets uniformes en [0, total_len]
+    target = np.linspace(0, total_len, n_samples)
+
+    # Interpolar X e Y en función de la distancia acumulada
+    x = np.interp(target, cumdist, pts[:, 0])
+    y = np.interp(target, cumdist, pts[:, 1])
+
+    out = np.stack([x, y], axis=1)
+    return out.reshape(-1, 1, 2).astype(np.int32)
